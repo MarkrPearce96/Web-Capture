@@ -38,12 +38,13 @@ Stitching happens in the content script (not the background script) so each capt
 1. User clicks the toolbar icon.
 2. Background script injects the content script into the active tab.
 3. Content script reports: full page width/height, viewport width/height, device pixel ratio, current scroll position.
-4. Loop, from page top to bottom in viewport-height steps:
+4. Content script does a pre-scroll pass: quickly scrolls the whole page top to bottom and back, so scroll-linked animations (e.g. GSAP ScrollTrigger reveals) and lazy-loaded content have fired and finished before capture, then re-measures page height in case that growth changed it (e.g. from lazy loading).
+5. Loop, from page top to bottom in viewport-height steps:
    - Content script scrolls to the target offset and waits briefly (~350 ms) for rendering and lazy-loaded content.
-   - After the first frame, `position: fixed` and `position: sticky` elements are hidden so they appear once at the top of the image rather than repeating.
+   - When hiding is requested, `position: fixed` and `position: sticky` elements are hidden so they appear once at the top of the image rather than repeating. This hiding scan re-runs after every scroll step (not just the first) so headers that only become fixed once scrolling starts (e.g. a scroll-listener-driven search bar) are still caught, even though they weren't fixed yet at the first step.
    - Background script calls `captureVisibleTab` (PNG data URL) and draws the frame onto the stitch canvas at the correct offset. The final frame is cropped so overlapping content is not duplicated.
-5. Content script restores hidden elements, scrollbars, and the original scroll position.
-6. Content script exports the canvas to a PNG blob and saves it via an anchor-click download.
+6. Content script restores hidden elements, scrollbars, and the original scroll position.
+7. Content script exports the canvas to a PNG blob and saves it via an anchor-click download.
 
 ## Output
 

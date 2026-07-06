@@ -14,6 +14,7 @@
     originalX: 0,
     originalY: 0,
     hidden: [], // [{ el, priorValue, priorPriority }]
+    hiddenSeen: null,
     scrollbarStyle: null,
     canvas: null,
     ctx: null,
@@ -32,6 +33,8 @@
     switch (message.type) {
       case "measure":
         return measure();
+      case "prescroll":
+        return prescroll();
       case "scrollTo":
         return scrollToStep(message);
       case "addFrame":
@@ -62,6 +65,7 @@
     state.originalX = window.scrollX;
     state.originalY = window.scrollY;
     state.hidden = [];
+    state.hiddenSeen = new WeakSet();
     state.canvas = null;
     state.ctx = null;
     state.restored = false;
@@ -79,21 +83,48 @@
     };
   }
 
-  async function scrollToStep({ y, hideFixed }) {
-    if (hideFixed && state.hidden.length === 0) {
-      hideFixedElements();
+  const PRESCROLL_SETTLE_MS = 180;
+
+  // Quickly scroll the whole page and back before capturing, so scroll-linked
+  // animations and lazy loading have fired (and finished) by the time each
+  // section is captured. Returns the possibly-changed page height.
+  async function prescroll() {
+    const step = window.innerHeight;
+    for (let y = 0; y < pageHeight(); y += step) {
+      window.scrollTo(0, y);
+      await settle(PRESCROLL_SETTLE_MS);
     }
+    window.scrollTo(0, Math.max(0, pageHeight() - step));
+    await settle(PRESCROLL_SETTLE_MS);
+    window.scrollTo(0, 0);
+    await settle(400);
+    return { pageHeight: pageHeight() };
+  }
+
+  async function scrollToStep({ y, hideFixed }) {
     window.scrollTo(0, y);
     await settle(SETTLE_MS);
+    if (hideFixed) {
+      hideFixedElements();
+      await settle(80);
+    }
     return { y: Math.round(window.scrollY) };
   }
 
-  // Fixed and sticky elements would repeat in every frame; hide them after
-  // the first frame so they appear once, at the top of the stitched image.
+  // Fixed and sticky elements would repeat in every frame; hide them so they
+  // appear once, at the top of the stitched image. Re-scans on every hiding
+  // step (not just the first) because some headers (e.g. Google's search
+  // bar) only gain `position: fixed` from a scroll listener once scrolling
+  // starts, so they aren't fixed yet when the first step runs. `hiddenSeen`
+  // makes this idempotent so an element already hidden isn't recorded twice.
   function hideFixedElements() {
     for (const el of document.querySelectorAll("body *")) {
+      if (state.hiddenSeen.has(el)) {
+        continue;
+      }
       const position = getComputedStyle(el).position;
       if (position === "fixed" || position === "sticky") {
+        state.hiddenSeen.add(el);
         state.hidden.push({
           el,
           priorValue: el.style.getPropertyValue("visibility"),
