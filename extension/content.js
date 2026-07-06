@@ -8,7 +8,10 @@
   }
   window.__webCaptureLoaded = true;
 
-  const SETTLE_MS = 350;
+  // Longer dwell gives scroll-linked animations (GSAP reveals, etc.) and
+  // lazy-loaded content time to finish before each frame is captured,
+  // replacing the former separate pre-scroll pass.
+  const SETTLE_MS = 700;
 
   const state = {
     originalX: 0,
@@ -33,8 +36,6 @@
     switch (message.type) {
       case "measure":
         return measure();
-      case "prescroll":
-        return prescroll();
       case "scrollTo":
         return scrollToStep(message);
       case "addFrame":
@@ -83,26 +84,6 @@
     };
   }
 
-  const PRESCROLL_SETTLE_MS = 180;
-
-  // Quickly scroll the whole page and back before capturing, so scroll-linked
-  // animations and lazy loading have fired (and finished) by the time each
-  // section is captured. Returns the possibly-changed page height.
-  async function prescroll() {
-    const step = window.innerHeight;
-    // Bound the pass at the tallest capturable height so infinite-scroll
-    // pages (which grow as you approach the bottom) can't loop forever.
-    const limit = MAX_CANVAS_PX / (window.devicePixelRatio || 1);
-    for (let y = 0; y < Math.min(pageHeight(), limit); y += step) {
-      window.scrollTo(0, y);
-      await settle(PRESCROLL_SETTLE_MS);
-    }
-    window.scrollTo(0, Math.max(0, Math.min(pageHeight(), limit) - step));
-    await settle(PRESCROLL_SETTLE_MS);
-    window.scrollTo(0, 0);
-    await settle(400);
-    return { pageHeight: pageHeight() };
-  }
 
   async function scrollToStep({ y, hideFixed }) {
     window.scrollTo(0, y);

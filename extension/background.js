@@ -32,8 +32,7 @@ async function captureFullPage(tab) {
 
   try {
     const metrics = await sendToTab(tab.id, { type: "measure" });
-    const { pageHeight } = await sendToTab(tab.id, { type: "prescroll" });
-    const steps = computeScrollSteps(pageHeight, metrics.viewportHeight);
+    const steps = computeScrollSteps(metrics.pageHeight, metrics.viewportHeight);
 
     for (let i = 0; i < steps.length; i++) {
       const { y } = await sendToTab(tab.id, {
