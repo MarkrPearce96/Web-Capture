@@ -24,9 +24,14 @@ An Xcode project with two targets:
 
 1. **Wrapper app (`Web Capture`)** — minimal macOS app required to host a Safari extension. Its only job is to exist and point the user to Safari's extension settings. No custom logic beyond the Xcode template.
 2. **Safari Web Extension (`Web Capture Extension`)** — plain JavaScript, Manifest V3, no frameworks or build step. Components:
-   - `manifest.json` — MV3 manifest. Permissions: `activeTab`, `scripting`, `downloads`. Toolbar action with icon, no popup.
-   - `background.js` — service worker. Listens for the toolbar click, orchestrates the capture loop, performs `captureVisibleTab` calls, stitches frames on an `OffscreenCanvas`, triggers the download.
-   - `content.js` — injected on demand via `browser.scripting.executeScript`. Measures page dimensions, performs scrolling, hides/restores fixed and sticky elements and scrollbars, restores original scroll position.
+   - `manifest.json` — MV3 manifest. Permissions: `activeTab`, `scripting`. Toolbar action with icon, no popup.
+   - `background.js` — non-persistent background script. Listens for the toolbar click, orchestrates the capture loop, performs `captureVisibleTab` calls.
+   - `content.js` — injected on demand via `browser.scripting.executeScript`. Measures page dimensions, performs scrolling, hides/restores fixed and sticky elements and scrollbars, restores original scroll position, stitches frames onto a canvas, and saves the PNG.
+   - `shared.js` — pure functions (scroll-step computation, filename generation, canvas-height cap) loaded by both scripts and unit-testable in Node.
+
+Note: Safari does not support the `browser.downloads` WebExtension API, so the save is triggered from the content script via an invisible `<a download>` anchor click on a blob URL — this saves to the Downloads folder with the chosen filename, with no dialog under Safari's default settings.
+
+Stitching happens in the content script (not the background script) so each captured frame is sent as its own modest-sized message rather than one very large final image crossing the messaging boundary.
 
 ## Capture Flow
 
@@ -38,12 +43,12 @@ An Xcode project with two targets:
    - After the first frame, `position: fixed` and `position: sticky` elements are hidden so they appear once at the top of the image rather than repeating.
    - Background script calls `captureVisibleTab` (PNG data URL) and draws the frame onto the stitch canvas at the correct offset. The final frame is cropped so overlapping content is not duplicated.
 5. Content script restores hidden elements, scrollbars, and the original scroll position.
-6. Canvas exports to a PNG blob; the background script downloads it via the `downloads` API.
+6. Content script exports the canvas to a PNG blob and saves it via an anchor-click download.
 
 ## Output
 
 - Format: PNG at native device resolution (2x on Retina).
-- Destination: Downloads folder via the `downloads` permission (no save dialog).
+- Destination: Downloads folder via an anchor-click download (no save dialog under Safari's default download settings).
 - Filename: `<host> <YYYY-MM-DD> at <HH.MM.SS>.png`, e.g. `example.com 2026-07-06 at 23.55.12.png`.
 
 ## Error Handling
