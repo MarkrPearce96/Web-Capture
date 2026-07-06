@@ -90,11 +90,14 @@
   // section is captured. Returns the possibly-changed page height.
   async function prescroll() {
     const step = window.innerHeight;
-    for (let y = 0; y < pageHeight(); y += step) {
+    // Bound the pass at the tallest capturable height so infinite-scroll
+    // pages (which grow as you approach the bottom) can't loop forever.
+    const limit = MAX_CANVAS_PX / (window.devicePixelRatio || 1);
+    for (let y = 0; y < Math.min(pageHeight(), limit); y += step) {
       window.scrollTo(0, y);
       await settle(PRESCROLL_SETTLE_MS);
     }
-    window.scrollTo(0, Math.max(0, pageHeight() - step));
+    window.scrollTo(0, Math.max(0, Math.min(pageHeight(), limit) - step));
     await settle(PRESCROLL_SETTLE_MS);
     window.scrollTo(0, 0);
     await settle(400);
