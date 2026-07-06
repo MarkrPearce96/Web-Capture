@@ -19,10 +19,10 @@ async function captureFullPage(tab) {
     files: ["shared.js", "content.js"],
   });
 
-  const metrics = await sendToTab(tab.id, { type: "measure" });
-  const steps = computeScrollSteps(metrics.pageHeight, metrics.viewportHeight);
-
   try {
+    const metrics = await sendToTab(tab.id, { type: "measure" });
+    const steps = computeScrollSteps(metrics.pageHeight, metrics.viewportHeight);
+
     for (let i = 0; i < steps.length; i++) {
       const { y } = await sendToTab(tab.id, {
         type: "scrollTo",
