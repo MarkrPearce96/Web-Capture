@@ -26,6 +26,11 @@ test("computeScrollSteps: page an exact multiple of the viewport", () => {
   assert.deepEqual(computeScrollSteps(2000, 1000), [0, 1000]);
 });
 
+test("computeScrollSteps: nonsensical viewport height returns a single step", () => {
+  assert.deepEqual(computeScrollSteps(2500, 0), [0]);
+  assert.deepEqual(computeScrollSteps(2500, -5), [0]);
+});
+
 test("buildFilename: formats host, date, and time", () => {
   const date = new Date(2026, 6, 6, 23, 55, 12); // 2026-07-06 23:55:12 local
   assert.equal(buildFilename("example.com", date), "example.com 2026-07-06 at 23.55.12.png");

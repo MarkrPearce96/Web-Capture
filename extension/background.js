@@ -2,12 +2,23 @@
 
 const BADGE_CLEAR_MS = 2500;
 
+// Tabs with a capture currently in flight. Guards against a second
+// icon-click mid-capture, which would send a second "measure" and wipe
+// state.hidden / corrupt the scroll-position record in content.js.
+const inFlightTabs = new Set();
+
 browser.action.onClicked.addListener(async (tab) => {
+  if (inFlightTabs.has(tab.id)) {
+    return; // a capture is already running for this tab; ignore the click
+  }
+  inFlightTabs.add(tab.id);
   try {
     await captureFullPage(tab);
   } catch (err) {
     console.error("Web Capture failed:", err);
     await showErrorBadge(tab.id);
+  } finally {
+    inFlightTabs.delete(tab.id);
   }
 });
 

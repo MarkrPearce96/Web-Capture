@@ -53,6 +53,12 @@
   }
 
   function measure() {
+    if (!state.restored) {
+      // Belt-and-braces: a stale, unrestored capture (e.g. from a click that
+      // never reached "finish") must never leak hidden elements or a
+      // corrupted scroll position into this new capture.
+      restore();
+    }
     state.originalX = window.scrollX;
     state.originalY = window.scrollY;
     state.hidden = [];
