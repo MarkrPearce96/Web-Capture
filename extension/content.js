@@ -23,6 +23,7 @@
     ctx: null,
     dpr: 1,
     restored: true,
+    overlay: null, // { host, url, onKeydown } while the preview overlay is open
   };
 
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -57,6 +58,10 @@
   }
 
   function measure() {
+    // Must run first: a lingering overlay from a previous capture is
+    // position: fixed and would otherwise be visible in every frame of the
+    // new capture if it were still around when dimensions are measured.
+    closeOverlay();
     if (!state.restored) {
       // Belt-and-braces: a stale, unrestored capture (e.g. from a click that
       // never reached "finish") must never leak hidden elements or a
@@ -158,6 +163,14 @@
         "image/png"
       );
     });
+    showOverlay(blob, filename);
+    return { ok: true };
+  }
+
+  // Saves `blob` to the Downloads folder via an invisible <a download> anchor
+  // click on a blob URL — Safari has no `browser.downloads` API. Used only by
+  // the overlay's Download button.
+  function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -166,7 +179,167 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    return { ok: true };
+  }
+
+  // Builds and shows the in-page preview overlay for a finished capture. The
+  // only call site is `finish()`.
+  function showOverlay(blob, filename) {
+    const url = URL.createObjectURL(blob);
+
+    const host = document.createElement("div");
+    host.style.position = "fixed";
+    host.style.inset = "0";
+    host.style.zIndex = "2147483647";
+
+    // Open shadow root so page CSS can never leak in (or out).
+    const shadow = host.attachShadow({ mode: "open" });
+
+    const style = document.createElement("style");
+    style.textContent = `
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+      }
+      .panel {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 90vw;
+        max-width: 720px;
+        max-height: 85vh;
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .image-area {
+        overflow: auto;
+        flex: 1;
+      }
+      .image-area img {
+        width: 100%;
+        display: block;
+      }
+      .button-row {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 12px 16px;
+        border-top: 1px solid #e2e2e2;
+        flex: none;
+      }
+      button {
+        font: inherit;
+        font-size: 14px;
+        border: none;
+        border-radius: 6px;
+        padding: 8px 16px;
+        cursor: pointer;
+      }
+      .primary {
+        background: #2273f2;
+        color: #fff;
+      }
+      .secondary {
+        background: #e5e5e5;
+        color: #222;
+      }
+      .close {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.08);
+        color: #333;
+        font-size: 15px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+    `;
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "backdrop";
+    backdrop.addEventListener("click", closeOverlay);
+
+    const panel = document.createElement("div");
+    panel.className = "panel";
+
+    const imageArea = document.createElement("div");
+    imageArea.className = "image-area";
+    const img = document.createElement("img");
+    img.src = url;
+    imageArea.appendChild(img);
+
+    const buttonRow = document.createElement("div");
+    buttonRow.className = "button-row";
+
+    const downloadBtn = document.createElement("button");
+    downloadBtn.className = "primary";
+    downloadBtn.textContent = "Download";
+    downloadBtn.addEventListener("click", () => {
+      downloadBlob(blob, filename);
+      downloadBtn.textContent = "Saved ✓";
+      setTimeout(closeOverlay, 600);
+    });
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "secondary";
+    copyBtn.textContent = "Copy";
+    copyBtn.addEventListener("click", async () => {
+      try {
+        // Must run synchronously inside the click handler to count as a user
+        // gesture for the Clipboard API.
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        copyBtn.textContent = "Copied ✓";
+        setTimeout(closeOverlay, 600);
+      } catch (err) {
+        copyBtn.textContent = "Copy failed";
+        console.error("Web Capture: copy to clipboard failed", err);
+      }
+    });
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "close";
+    closeBtn.textContent = "✕";
+    closeBtn.setAttribute("aria-label", "Close");
+    closeBtn.addEventListener("click", closeOverlay);
+
+    buttonRow.append(downloadBtn, copyBtn);
+    panel.append(imageArea, buttonRow, closeBtn);
+    shadow.append(style, backdrop, panel);
+    document.documentElement.appendChild(host);
+
+    const onKeydown = (event) => {
+      if (event.key === "Escape") {
+        closeOverlay();
+      }
+    };
+    window.addEventListener("keydown", onKeydown, true);
+
+    state.overlay = { host, url, onKeydown };
+  }
+
+  // Idempotent: a no-op when no overlay is open, so every close path (✕,
+  // backdrop click, Escape, post-Download, post-Copy, and the next
+  // measure()) can call it unconditionally.
+  function closeOverlay() {
+    if (!state.overlay) {
+      return;
+    }
+    const { host, url, onKeydown } = state.overlay;
+    window.removeEventListener("keydown", onKeydown, true);
+    URL.revokeObjectURL(url);
+    host.remove();
+    state.overlay = null;
   }
 
   function restore() {
