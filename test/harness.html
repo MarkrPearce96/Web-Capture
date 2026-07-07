@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Web Capture Test Harness</title>
+<style>
+  body { margin: 0; font-family: -apple-system, sans-serif; }
+  .page {
+    height: 5000px;
+    background: linear-gradient(to bottom, #ff5f6d, #ffc371, #47c9af, #4568dc, #b06ab3);
+    position: relative;
+  }
+  .sticky-header {
+    position: sticky;
+    top: 0;
+    background: #111;
+    color: #fff;
+    padding: 12px 20px;
+    font-size: 18px;
+    z-index: 10;
+  }
+  .js-fixed-header {
+    position: static;
+    background: #5c0000;
+    color: #fff;
+    padding: 12px 20px;
+    font-size: 18px;
+    z-index: 5;
+  }
+  .js-fixed-header.is-fixed {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+  }
+  .marker {
+    position: absolute;
+    left: 20px;
+    color: #fff;
+    font-size: 28px;
+    font-weight: 700;
+    text-shadow: 0 1px 3px rgba(0,0,0,.6);
+  }
+  .lazy-wrap { position: absolute; bottom: 120px; left: 20px; }
+  .reveal {
+    position: absolute;
+    top: 3000px;
+    left: 20px;
+    width: 400px;
+    padding: 20px;
+    background: #222;
+    color: #fff;
+    font-size: 20px;
+    font-weight: 700;
+    opacity: 0;
+    transform: translateY(40px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="sticky-header">STICKY HEADER — must appear exactly once in the capture</div>
+  <div class="js-fixed-header" id="js-fixed-header">JS FIXED HEADER — must appear exactly once</div>
+  <div class="marker" style="top: 100px;">Marker 1 — 100px</div>
+  <div class="marker" style="top: 600px;">Marker 2 — 600px</div>
+  <div class="marker" style="top: 1100px;">Marker 3 — 1100px</div>
+  <div class="marker" style="top: 1600px;">Marker 4 — 1600px</div>
+  <div class="marker" style="top: 2100px;">Marker 5 — 2100px</div>
+  <div class="marker" style="top: 2600px;">Marker 6 — 2600px</div>
+  <div class="reveal" id="reveal">SCROLL-TRIGGERED CONTENT — must be visible in the capture</div>
+  <div class="marker" style="top: 3100px;">Marker 7 — 3100px</div>
+  <div class="marker" style="top: 3600px;">Marker 8 — 3600px</div>
+  <div class="marker" style="top: 4100px;">Marker 9 — 4100px</div>
+  <div class="marker" style="top: 4600px;">Marker 10 — 4600px</div>
+  <div class="lazy-wrap">
+    <img loading="lazy" width="400" height="100" alt="lazy test image"
+         src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='100'%3E%3Crect width='400' height='100' fill='%23222'/%3E%3Ctext x='200' y='55' fill='%23fff' text-anchor='middle' font-size='20' font-family='sans-serif'%3ELAZY IMAGE LOADED%3C/text%3E%3C/svg%3E">
+  </div>
+</div>
+<script>
+  // JS-FIXED HEADER: becomes position: fixed only once the user has
+  // scrolled past 50px, mirroring headers (e.g. Google's search bar) that
+  // aren't fixed at scan time until a scroll listener fires.
+  const jsFixedHeader = document.getElementById("js-fixed-header");
+  window.addEventListener("scroll", () => {
+    jsFixedHeader.classList.toggle("is-fixed", window.scrollY > 50);
+  });
+
+  // SCROLL-TRIGGERED CONTENT: fades/slides in via IntersectionObserver once
+  // it enters the viewport, mirroring GSAP ScrollTrigger-style reveals.
+  const reveal = document.getElementById("reveal");
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("is-visible");
+        }
+      }
+    },
+    { threshold: 0.1 }
+  );
+  observer.observe(reveal);
+</script>
+</body>
+</html>
