@@ -315,6 +315,14 @@ function createAnnotator(options) {
   // once the pointer is released, so this doubles as "is something being
   // dragged right now".
   var grabbed = null;
+  // Set to the just-committed annotation immediately after a drawing tool
+  // (pen/line/arrow/rect/ellipse) finishes a stroke (see onPointerUp's
+  // drawing-commit branch), and cleared on the next drawing pointerdown,
+  // tool switch, undo, clear, or once its move-drag (if any) is released.
+  // While set, it shows the same dashed selection cue as `grabbed` and, if
+  // the next drag starts on it, that drag moves it instead of drawing — see
+  // onPointerDown's freshSelection check, ahead of the normal drawing start.
+  var freshSelection = null;
   var selectedTool = null;
   var selectedColor = ANNOT_COLORS[0];
   var selectedSizeCssPx = ANNOT_SIZES[1].cssPx; // M, a reasonable middle default
@@ -448,6 +456,10 @@ function createAnnotator(options) {
   function selectTool(toolId) {
     selectedTool = toolId;
     updateToolbarUI();
+    if (freshSelection) {
+      freshSelection = null;
+      repaint();
+    }
   }
 
   function selectColor(color) {
@@ -465,6 +477,7 @@ function createAnnotator(options) {
       return;
     }
     annotations.pop();
+    freshSelection = null;
     repaint();
   }
 
@@ -473,6 +486,7 @@ function createAnnotator(options) {
       return;
     }
     annotations = [];
+    freshSelection = null;
     repaint();
   }
 
@@ -507,6 +521,12 @@ function createAnnotator(options) {
     }
     if (grabbed) {
       drawSelectionCue(ctx, grabbed.annotation);
+    }
+    // Fresh-selection cue: skip it if `grabbed` is already dragging this
+    // same annotation (its cue was just drawn above) — avoids a double draw
+    // while a fresh selection's move-drag is in progress.
+    if (freshSelection && (!grabbed || grabbed.annotation !== freshSelection)) {
+      drawSelectionCue(ctx, freshSelection);
     }
   }
 
@@ -551,22 +571,28 @@ function createAnnotator(options) {
   function hitTest(pt) {
     for (var i = annotations.length - 1; i >= 0; i--) {
       var a = annotations[i];
-      var tol = a.width / 2 + 8 / scale;
-      if (a.tool === "pen") {
-        if (hitPen(a, pt, tol)) {
-          return a;
-        }
-      } else if (a.tool === "line" || a.tool === "arrow") {
-        if (distancePointToSegment(pt.x, pt.y, a.x0, a.y0, a.x1, a.y1) <= tol) {
-          return a;
-        }
-      } else if (a.tool === "rect" || a.tool === "ellipse") {
-        if (hitBox(a, pt, tol)) {
-          return a;
-        }
+      if (hitAnnotation(a, pt.x, pt.y)) {
+        return a;
       }
     }
     return null;
+  }
+
+  // Per-annotation hit check, factored out of hitTest so onPointerDown's
+  // freshSelection branch (see below) can test a single known annotation
+  // without scanning the whole `annotations` array.
+  function hitAnnotation(a, px, py) {
+    var tol = a.width / 2 + 8 / scale;
+    if (a.tool === "pen") {
+      return hitPen(a, { x: px, y: py }, tol);
+    }
+    if (a.tool === "line" || a.tool === "arrow") {
+      return distancePointToSegment(px, py, a.x0, a.y0, a.x1, a.y1) <= tol;
+    }
+    if (a.tool === "rect" || a.tool === "ellipse") {
+      return hitBox(a, { x: px, y: py }, tol);
+    }
+    return false;
   }
 
   function hitPen(a, pt, tol) {
@@ -636,6 +662,20 @@ function createAnnotator(options) {
       return;
     }
 
+    // A drawing tool is active. If the previous stroke is still "live"
+    // (freshSelection) and this drag starts on top of it, move it instead
+    // of starting a new drawing — same move-drag machinery as the Select
+    // tool's grab above, just triggered from a drawing tool.
+    if (freshSelection && hitAnnotation(freshSelection, pt.x, pt.y)) {
+      layer.setPointerCapture(e.pointerId);
+      activePointerId = e.pointerId;
+      grabbed = { annotation: freshSelection, lastX: pt.x, lastY: pt.y };
+      layer.classList.add("annot-grabbing");
+      repaint();
+      return;
+    }
+    freshSelection = null;
+
     layer.setPointerCapture(e.pointerId);
     activePointerId = e.pointerId;
     var widthNatural = selectedSizeCssPx / scale;
@@ -697,9 +737,16 @@ function createAnnotator(options) {
       // annotation off the end of `annotations`; moving an existing one
       // in place doesn't touch that stack, so Undo after a move removes
       // whatever was last drawn, not the move itself.
+      var releasedAnnotation = grabbed.annotation;
       grabbed = null;
       activePointerId = null;
       layer.classList.remove("annot-grabbing");
+      // Releasing a move-drag on the live fresh selection ends its "live"
+      // state — whether the grab came from the freshSelection path above or
+      // the Select tool happening to grab the same object.
+      if (releasedAnnotation === freshSelection) {
+        freshSelection = null;
+      }
       repaint();
       return;
     }
@@ -711,6 +758,7 @@ function createAnnotator(options) {
     activePointerId = null;
     if (isNonDegenerate(finished)) {
       annotations.push(finished);
+      freshSelection = finished;
     }
     repaint();
   }
@@ -746,6 +794,7 @@ function createAnnotator(options) {
       return;
     }
     destroyed = true;
+    freshSelection = null;
     window.removeEventListener("resize", onResize);
     layer.remove();
   }
