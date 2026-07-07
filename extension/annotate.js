@@ -1194,6 +1194,13 @@ function createAnnotator(options) {
     positionTextEditor(el, annotation);
     el.addEventListener("input", function () {
       autoGrowEditor(el);
+      // Flip the toolbar to Select on the first keystroke (not at commit),
+      // so the moment something is typed the next click selects/moves the
+      // box instead of placing another one. commitTextEditor's own switch
+      // then becomes a no-op backstop.
+      if (selectedTool === "text") {
+        applyToolState("select");
+      }
     });
     el.addEventListener("blur", function () {
       commitTextEditor();
