@@ -290,8 +290,8 @@
         left: 50%;
         transform: translate(-50%, -50%);
         width: 90vw;
-        max-width: 720px;
-        max-height: 85vh;
+        max-width: 900px;
+        max-height: 88vh;
         background: #fff;
         border-radius: 12px;
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
@@ -611,6 +611,12 @@
     annotator = createAnnotator({ img, sourceCanvas: canvas, wrapper, shadowRoot: shadow });
     panel.insertBefore(annotator.toolbar, buttonRow);
     overlayRecord.annotator = annotator;
+
+    // Freeze the panel's natural height so zooming (which grows the image
+    // wrapper) can only scroll inside the image area, never reshape the panel.
+    if (state.overlay === overlayRecord) {
+      panel.style.height = Math.ceil(panel.getBoundingClientRect().height) + "px";
+    }
 
     function onWindowResize() {
       applyZoomWidth();
