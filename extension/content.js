@@ -24,6 +24,7 @@
     dpr: 1,
     restored: true,
     overlay: null, // { host, url, onKeydown } while the preview overlay is open
+    progressPill: null, // { host, bar, label } while a capture is in progress
   };
 
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -62,6 +63,7 @@
     // position: fixed and would otherwise be visible in every frame of the
     // new capture if it were still around when dimensions are measured.
     closeOverlay();
+    removeProgressPill();
     if (!state.restored) {
       // Belt-and-braces: a stale, unrestored capture (e.g. from a click that
       // never reached "finish") must never leak hidden elements or a
@@ -90,14 +92,19 @@
   }
 
 
-  async function scrollToStep({ y, hideFixed }) {
+  async function scrollToStep({ y, hideFixed, progress }) {
+    if (progress) {
+      updateProgressPill(progress.current, progress.total);
+    }
     window.scrollTo(0, y);
     await settle(SETTLE_MS);
     if (hideFixed) {
       hideFixedElements();
       await settle(80);
     }
-    return { y: Math.round(window.scrollY) };
+    const result = { y: Math.round(window.scrollY) };
+    hideProgressPill();
+    return result;
   }
 
   // Fixed and sticky elements would repeat in every frame; hide them so they
@@ -163,7 +170,7 @@
         "image/png"
       );
     });
-    showOverlay(blob, filename);
+    showOverlay(canvas, blob, filename);
     return { ok: true };
   }
 
@@ -182,8 +189,10 @@
   }
 
   // Builds and shows the in-page preview overlay for a finished capture. The
-  // only call site is `finish()`.
-  function showOverlay(blob, filename) {
+  // only call site is `finish()`. `canvas` is the full-resolution stitched
+  // capture (kept around for JPEG re-encoding and PDF paging); `blob` is
+  // always the PNG export, used for the preview `<img>` and the Copy button.
+  function showOverlay(canvas, blob, filename) {
     const url = URL.createObjectURL(blob);
 
     const host = document.createElement("div");
@@ -223,6 +232,42 @@
       .image-area img {
         width: 100%;
         display: block;
+      }
+      .options-row {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 18px;
+        padding: 10px 16px;
+        border-top: 1px solid #e2e2e2;
+        font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+        flex: none;
+      }
+      .field {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .field-label {
+        color: #666;
+        font-size: 12px;
+      }
+      .options-row select {
+        font: inherit;
+        font-size: 13px;
+        padding: 4px 6px;
+        border-radius: 6px;
+        border: 1px solid #d0d0d0;
+        background: #fff;
+        color: #222;
+      }
+      .quality-group input[type="range"] {
+        width: 100px;
+      }
+      .quality-value {
+        color: #666;
+        min-width: 32px;
+        text-align: right;
       }
       .button-row {
         display: flex;
@@ -279,21 +324,125 @@
     img.src = url;
     imageArea.appendChild(img);
 
+    const optionsRow = document.createElement("div");
+    optionsRow.className = "options-row";
+
+    const formatField = document.createElement("div");
+    formatField.className = "field";
+    const formatLabel = document.createElement("span");
+    formatLabel.className = "field-label";
+    formatLabel.textContent = "Format";
+    const formatSelect = document.createElement("select");
+    [
+      { value: "png", label: "PNG" },
+      { value: "jpeg", label: "JPEG" },
+      { value: "pdf", label: "PDF" },
+    ].forEach(({ value, label }) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      formatSelect.appendChild(option);
+    });
+    formatField.append(formatLabel, formatSelect);
+
+    const qualityGroup = document.createElement("div");
+    qualityGroup.className = "field quality-group";
+    qualityGroup.style.display = "none";
+    const qualityLabel = document.createElement("span");
+    qualityLabel.className = "field-label";
+    qualityLabel.textContent = "Quality";
+    const qualityInput = document.createElement("input");
+    qualityInput.type = "range";
+    qualityInput.min = "50";
+    qualityInput.max = "100";
+    qualityInput.step = "5";
+    qualityInput.value = "85";
+    const qualityValue = document.createElement("span");
+    qualityValue.className = "quality-value";
+    qualityValue.textContent = "85%";
+    qualityInput.addEventListener("input", () => {
+      qualityValue.textContent = `${qualityInput.value}%`;
+    });
+    qualityGroup.append(qualityLabel, qualityInput, qualityValue);
+
+    formatSelect.addEventListener("change", () => {
+      qualityGroup.style.display = formatSelect.value === "jpeg" ? "flex" : "none";
+    });
+
+    optionsRow.append(formatField, qualityGroup);
+
     const buttonRow = document.createElement("div");
     buttonRow.className = "button-row";
 
     const downloadBtn = document.createElement("button");
     downloadBtn.className = "primary";
     downloadBtn.textContent = "Download";
-    downloadBtn.addEventListener("click", () => {
-      downloadBlob(blob, filename);
-      downloadBtn.textContent = "Saved ✓";
-      const mine = state.overlay;
-      setTimeout(() => {
-        if (state.overlay === mine) {
-          closeOverlay();
+    downloadBtn.addEventListener("click", async () => {
+      const format = formatSelect.value;
+
+      if (format === "png") {
+        downloadBlob(blob, filename);
+        downloadBtn.textContent = "Saved ✓";
+        const mine = state.overlay;
+        setTimeout(() => {
+          if (state.overlay === mine) {
+            closeOverlay();
+          }
+        }, 600);
+        return;
+      }
+
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = "Exporting…";
+      try {
+        if (format === "jpeg") {
+          const quality = Number(qualityInput.value) / 100;
+          const jpegBlob = await new Promise((resolve, reject) => {
+            canvas.toBlob(
+              (b) => (b ? resolve(b) : reject(new Error("JPEG export failed"))),
+              "image/jpeg",
+              quality
+            );
+          });
+          downloadBlob(jpegBlob, filename.replace(/\.png$/i, ".jpg"));
+        } else if (format === "pdf") {
+          // Slice the full-resolution canvas into A4-portrait-aspect chunks
+          // so each page of the PDF is a 1:1 crop (no re-scaling) of the
+          // stitched capture.
+          const sliceHeight = Math.round(canvas.width * (841.89 / 595.28));
+          const pages = [];
+          for (let top = 0; top < canvas.height; top += sliceHeight) {
+            const w = canvas.width;
+            const h = Math.min(sliceHeight, canvas.height - top);
+            const chunk = document.createElement("canvas");
+            chunk.width = w;
+            chunk.height = h;
+            chunk.getContext("2d").drawImage(canvas, 0, top, w, h, 0, 0, w, h);
+            const chunkBlob = await new Promise((resolve, reject) => {
+              chunk.toBlob(
+                (b) => (b ? resolve(b) : reject(new Error("PDF page export failed"))),
+                "image/jpeg",
+                0.85
+              );
+            });
+            pages.push({ jpeg: new Uint8Array(await chunkBlob.arrayBuffer()), width: w, height: h });
+          }
+          const pdfBytes = buildPdf(pages);
+          const pdfBlob = new Blob([pdfBytes], { type: "application/pdf" });
+          downloadBlob(pdfBlob, filename.replace(/\.png$/i, ".pdf"));
         }
-      }, 600);
+        downloadBtn.textContent = "Saved ✓";
+        const mine = state.overlay;
+        setTimeout(() => {
+          if (state.overlay === mine) {
+            closeOverlay();
+          }
+        }, 600);
+      } catch (err) {
+        downloadBtn.textContent = "Export failed";
+        downloadBtn.disabled = false;
+        console.error("Web Capture: export failed", err);
+      }
     });
 
     const copyBtn = document.createElement("button");
@@ -324,7 +473,7 @@
     closeBtn.addEventListener("click", closeOverlay);
 
     buttonRow.append(downloadBtn, copyBtn);
-    panel.append(imageArea, buttonRow, closeBtn);
+    panel.append(imageArea, optionsRow, buttonRow, closeBtn);
     shadow.append(style, backdrop, panel);
     document.documentElement.appendChild(host);
 
@@ -352,11 +501,102 @@
     state.overlay = null;
   }
 
+  // Creates (on first call) or updates the bottom-center progress pill shown
+  // while a capture is running. Must be hidden (not just left alone) before
+  // each `captureVisibleTab` call — see `hideProgressPill()` — so it never
+  // appears in a captured frame.
+  function updateProgressPill(current, total) {
+    const pct = Math.round((current / total) * 100);
+    if (!state.progressPill) {
+      const host = document.createElement("div");
+      host.style.position = "fixed";
+      host.style.left = "50%";
+      host.style.transform = "translateX(-50%)";
+      host.style.bottom = "24px";
+      host.style.zIndex = "2147483647";
+
+      const shadow = host.attachShadow({ mode: "open" });
+      const style = document.createElement("style");
+      style.textContent = `
+        .pill {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          width: 240px;
+          box-sizing: border-box;
+          padding: 10px 16px;
+          background: rgba(20, 20, 20, 0.85);
+          border-radius: 999px;
+          font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+          color: #fff;
+        }
+        .track {
+          flex: 1;
+          width: 160px;
+          height: 6px;
+          background: rgba(255, 255, 255, 0.25);
+          border-radius: 999px;
+          overflow: hidden;
+        }
+        .fill {
+          height: 100%;
+          width: 0%;
+          background: #fff;
+          border-radius: 999px;
+          transition: width 0.2s;
+        }
+        .label {
+          flex: none;
+          white-space: nowrap;
+        }
+      `;
+
+      const pill = document.createElement("div");
+      pill.className = "pill";
+      const track = document.createElement("div");
+      track.className = "track";
+      const bar = document.createElement("div");
+      bar.className = "fill";
+      track.appendChild(bar);
+      const label = document.createElement("span");
+      label.className = "label";
+      pill.append(track, label);
+      shadow.append(style, pill);
+      document.documentElement.appendChild(host);
+
+      state.progressPill = { host, bar, label };
+    }
+    const { host, bar, label } = state.progressPill;
+    bar.style.width = `${pct}%`;
+    label.textContent = formatProgress(current, total);
+    host.style.visibility = "visible";
+  }
+
+  // Hides (does not remove) the pill so it's gone at the instant
+  // `captureVisibleTab` fires; `updateProgressPill` makes it visible again at
+  // the next step.
+  function hideProgressPill() {
+    if (state.progressPill) {
+      state.progressPill.host.style.visibility = "hidden";
+    }
+  }
+
+  // Idempotent: tears the pill down entirely once a capture finishes or
+  // aborts, so a stale pill never leaks into a later capture.
+  function removeProgressPill() {
+    if (!state.progressPill) {
+      return;
+    }
+    state.progressPill.host.remove();
+    state.progressPill = null;
+  }
+
   function restore() {
     if (state.restored) {
       return { ok: true };
     }
     state.restored = true;
+    removeProgressPill();
     for (const { el, priorValue, priorPriority } of state.hidden) {
       if (priorValue) {
         el.style.setProperty("visibility", priorValue, priorPriority);

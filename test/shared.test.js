@@ -8,6 +8,7 @@ const {
   buildFilename,
   cappedCanvasHeight,
   MAX_CANVAS_PX,
+  formatProgress,
 } = require("../extension/shared.js");
 
 test("computeScrollSteps: page needing a partial last frame", () => {
@@ -58,4 +59,14 @@ test("cappedCanvasHeight: below the cap is untouched", () => {
 test("cappedCanvasHeight: above the cap is clamped", () => {
   assert.equal(cappedCanvasHeight(10000, 2), MAX_CANVAS_PX);
   assert.equal(MAX_CANVAS_PX, 16384);
+});
+
+test("formatProgress: formats progress as a percentage", () => {
+  assert.equal(formatProgress(1, 4), "25%");
+  assert.equal(formatProgress(12, 12), "100%");
+});
+
+test("formatProgress: rounds to the nearest whole percent", () => {
+  assert.equal(formatProgress(1, 3), "33%");
+  assert.equal(formatProgress(2, 3), "67%");
 });

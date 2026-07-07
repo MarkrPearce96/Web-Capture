@@ -22,6 +22,7 @@
 		4D71F6552FFC0E4C0009059C /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6502FFC0E4C0009059C /* manifest.json */; };
 		4D71F6562FFC0E4C0009059C /* content.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6512FFC0E4C0009059C /* content.js */; };
 		4D71F6572FFC0E4C0009059C /* shared.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6522FFC0E4C0009059C /* shared.js */; };
+		4D71F6582FFC0E4C0009059C /* pdf.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6592FFC0E4C0009059C /* pdf.js */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -67,6 +68,7 @@
 		4D71F6502FFC0E4C0009059C /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = manifest.json; path = ../../../extension/manifest.json; sourceTree = "<group>"; };
 		4D71F6512FFC0E4C0009059C /* content.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = content.js; path = ../../../extension/content.js; sourceTree = "<group>"; };
 		4D71F6522FFC0E4C0009059C /* shared.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = shared.js; path = ../../../extension/shared.js; sourceTree = "<group>"; };
+		4D71F6592FFC0E4C0009059C /* pdf.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = pdf.js; path = ../../../extension/pdf.js; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -147,6 +149,7 @@
 				4D71F6502FFC0E4C0009059C /* manifest.json */,
 				4D71F6512FFC0E4C0009059C /* content.js */,
 				4D71F6522FFC0E4C0009059C /* shared.js */,
+				4D71F6592FFC0E4C0009059C /* pdf.js */,
 			);
 			name = Resources;
 			path = "Web Capture Extension";
@@ -256,6 +259,7 @@
 				4D71F6552FFC0E4C0009059C /* manifest.json in Resources */,
 				4D71F6572FFC0E4C0009059C /* shared.js in Resources */,
 				4D71F6532FFC0E4C0009059C /* background.js in Resources */,
+				4D71F6582FFC0E4C0009059C /* pdf.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

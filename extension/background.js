@@ -27,7 +27,7 @@ async function captureFullPage(tab) {
   // which lands in the error-badge path above.
   await browser.scripting.executeScript({
     target: { tabId: tab.id },
-    files: ["shared.js", "content.js"],
+    files: ["shared.js", "pdf.js", "content.js"],
   });
 
   try {
@@ -39,6 +39,7 @@ async function captureFullPage(tab) {
         type: "scrollTo",
         y: steps[i],
         hideFixed: i > 0,
+        progress: { current: i + 1, total: steps.length },
       });
       if (y * metrics.dpr >= MAX_CANVAS_PX) {
         break; // page is taller than the canvas cap; keep what we have
@@ -75,3 +76,4 @@ async function showErrorBadge(tabId) {
     // Badge is best-effort; never let it throw over the real error.
   }
 }
+

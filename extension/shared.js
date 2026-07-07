@@ -38,6 +38,12 @@ function cappedCanvasHeight(pageHeight, dpr) {
   return Math.min(Math.round(pageHeight * dpr), MAX_CANVAS_PX);
 }
 
+// Toolbar-badge progress label, e.g. "25%". Percent keeps the label within
+// Safari's ~4-character badge limit on any page length.
+function formatProgress(current, total) {
+  return `${Math.round((current / total) * 100)}%`;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { computeScrollSteps, buildFilename, cappedCanvasHeight, MAX_CANVAS_PX };
+  module.exports = { computeScrollSteps, buildFilename, cappedCanvasHeight, MAX_CANVAS_PX, formatProgress };
 }
