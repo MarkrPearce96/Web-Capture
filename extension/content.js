@@ -612,6 +612,13 @@
     panel.insertBefore(annotator.toolbar, buttonRow);
     overlayRecord.annotator = annotator;
 
+    function onWindowResize() {
+      applyZoomWidth();
+      annotator.refresh();
+    }
+    window.addEventListener("resize", onWindowResize);
+    overlayRecord.onResize = onWindowResize;
+
     // ---- pinch-to-zoom (trackpad pinch via Safari's non-standard gesture
     // events, or ctrl+wheel as the emulated equivalent) ----------------
     // Zoom factor 1 (fit width, current look) to 6, applied to the img's
@@ -625,6 +632,17 @@
     // explicitly remove them at close: they die with the rest of the
     // subtree when `host.remove()` runs.
     let zoom = 1;
+
+    function applyZoomWidth() {
+      if (zoom === 1) {
+        img.style.removeProperty("width");
+        wrapper.style.removeProperty("width");
+      } else {
+        var targetWidth = imageArea.clientWidth * zoom;
+        img.style.width = targetWidth + "px";
+        wrapper.style.width = targetWidth + "px";
+      }
+    }
 
     function setZoom(next, clientX, clientY) {
       next = Math.min(6, Math.max(1, next));
@@ -652,9 +670,7 @@
       // auto-grows with in-flow content — so without this, the annotation
       // layer (annot-layer is `inset: 0` of wrapper) would stay clipped to
       // the un-zoomed width instead of covering the zoomed image.
-      const targetWidth = imageArea.clientWidth * zoom;
-      img.style.width = targetWidth + "px";
-      wrapper.style.width = targetWidth + "px";
+      applyZoomWidth();
       imageArea.scrollLeft = newScrollLeft;
       imageArea.scrollTop = newScrollTop;
       annotator.refresh();
@@ -704,12 +720,15 @@
     if (!state.overlay) {
       return;
     }
-    const { host, url, onKeydown, annotator, priorHtmlOverflow, priorBodyOverflow } =
+    const { host, url, onKeydown, onResize, annotator, priorHtmlOverflow, priorBodyOverflow } =
       state.overlay;
     if (annotator) {
       annotator.destroy();
     }
     window.removeEventListener("keydown", onKeydown, true);
+    if (onResize) {
+      window.removeEventListener("resize", onResize);
+    }
     URL.revokeObjectURL(url);
     host.remove();
     if (priorHtmlOverflow) {
