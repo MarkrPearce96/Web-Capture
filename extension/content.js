@@ -310,16 +310,6 @@
         width: 100%;
         display: block;
       }
-      .options-row {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 18px;
-        padding: 10px 16px;
-        border-top: 1px solid #e2e2e2;
-        font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
-        flex: none;
-      }
       .field {
         display: flex;
         align-items: center;
@@ -329,7 +319,7 @@
         color: #666;
         font-size: 12px;
       }
-      .options-row select {
+      .button-row select {
         font: inherit;
         font-size: 13px;
         padding: 4px 6px;
@@ -348,11 +338,22 @@
       }
       .button-row {
         display: flex;
-        justify-content: flex-end;
-        gap: 8px;
+        align-items: center;
+        gap: 18px;
         padding: 12px 16px;
         border-top: 1px solid #e2e2e2;
         flex: none;
+        flex-wrap: wrap;
+      }
+      .button-row .format-controls {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      .button-row .button-group {
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
       }
       button {
         font: inherit;
@@ -404,9 +405,6 @@
     wrapper.appendChild(img);
     imageArea.appendChild(wrapper);
 
-    const optionsRow = document.createElement("div");
-    optionsRow.className = "options-row";
-
     const formatField = document.createElement("div");
     formatField.className = "field";
     const formatLabel = document.createElement("span");
@@ -449,7 +447,9 @@
       qualityGroup.style.display = formatSelect.value === "jpeg" ? "flex" : "none";
     });
 
-    optionsRow.append(formatField, qualityGroup);
+    const formatControls = document.createElement("div");
+    formatControls.className = "format-controls";
+    formatControls.append(formatField, qualityGroup);
 
     const buttonRow = document.createElement("div");
     buttonRow.className = "button-row";
@@ -557,8 +557,12 @@
     closeBtn.setAttribute("aria-label", "Close");
     closeBtn.addEventListener("click", closeOverlay);
 
-    buttonRow.append(downloadBtn, copyBtn);
-    panel.append(imageArea, optionsRow, buttonRow, closeBtn);
+    const buttonGroup = document.createElement("div");
+    buttonGroup.className = "button-group";
+    buttonGroup.append(downloadBtn, copyBtn);
+
+    buttonRow.append(formatControls, buttonGroup);
+    panel.append(imageArea, buttonRow, closeBtn);
     shadow.append(style, backdrop, panel);
     document.documentElement.appendChild(host);
 
@@ -583,7 +587,7 @@
       return;
     }
     annotator = createAnnotator({ img, sourceCanvas: canvas, wrapper, shadowRoot: shadow });
-    panel.insertBefore(annotator.toolbar, optionsRow);
+    panel.insertBefore(annotator.toolbar, buttonRow);
     overlayRecord.annotator = annotator;
   }
 
