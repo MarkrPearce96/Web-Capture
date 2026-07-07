@@ -25,6 +25,7 @@
     restored: true,
     overlay: null, // { host, url, onKeydown } while the preview overlay is open
     progressPill: null, // { host, bar, label } while a capture is in progress
+    regionSelect: null, // { host, onKeydown } while the region-select UI is open
   };
 
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -46,6 +47,10 @@
         return finish(message);
       case "restore":
         return restore();
+      case "previewImage":
+        return previewImage(message);
+      case "selectRegion":
+        return selectRegion();
       default:
         throw new Error(`unknown message type: ${message.type}`);
     }
@@ -64,6 +69,7 @@
     // new capture if it were still around when dimensions are measured.
     closeOverlay();
     removeProgressPill();
+    removeRegionSelect();
     if (!state.restored) {
       // Belt-and-braces: a stale, unrestored capture (e.g. from a click that
       // never reached "finish") must never leak hidden elements or a
@@ -164,13 +170,60 @@
     if (!canvas) {
       throw new Error("no frames were captured");
     }
-    const blob = await new Promise((resolve, reject) => {
+    const blob = await canvasToBlob(canvas, "image/png");
+    showOverlay(canvas, blob, filename);
+    return { ok: true };
+  }
+
+  // Wraps canvas.toBlob in a promise, rejecting when the browser can't
+  // produce a blob (e.g. a tainted or zero-size canvas). Shared by `finish`
+  // and `previewImage` — the two PNG-export call sites — so the pattern
+  // isn't duplicated between them.
+  function canvasToBlob(canvas, type, quality) {
+    return new Promise((resolve, reject) => {
       canvas.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error("PNG export failed"))),
-        "image/png"
+        (b) => (b ? resolve(b) : reject(new Error(`canvas export to ${type} failed`))),
+        type,
+        quality
       );
     });
-    showOverlay(canvas, blob, filename);
+  }
+
+  // Builds the cropped or full-page preview canvas for the visible-area and
+  // region-capture flows (background.js's `captureVisibleArea` /
+  // `handleRegionSelected`). `dataUrl` is a single `captureVisibleTab` PNG;
+  // `rect` (viewport CSS px) is present only for the region-select flow.
+  async function previewImage({ dataUrl, rect }) {
+    const img = new Image();
+    img.src = dataUrl;
+    await img.decode();
+    // Derive the real capture scale from the frame itself rather than
+    // trusting devicePixelRatio — Safari decides the capture resolution.
+    const scale = img.naturalWidth / window.innerWidth;
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    if (rect) {
+      const sx = Math.round(Math.max(0, rect.x * scale));
+      const sy = Math.round(Math.max(0, rect.y * scale));
+      const sw = Math.round(Math.min(rect.w * scale, img.naturalWidth - sx));
+      const sh = Math.round(Math.min(rect.h * scale, img.naturalHeight - sy));
+      if (sw < 1 || sh < 1) {
+        throw new Error("selected region is empty after clamping to the captured frame");
+      }
+      canvas.width = sw;
+      canvas.height = sh;
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+    } else {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+    }
+
+    const blob = await canvasToBlob(canvas, "image/png");
+    closeOverlay();
+    showOverlay(canvas, blob, buildFilename(location.hostname || "page", new Date()));
     return { ok: true };
   }
 
@@ -589,6 +642,175 @@
     }
     state.progressPill.host.remove();
     state.progressPill = null;
+  }
+
+  // Builds the drag-to-select overlay used by the "Capture Selected Region"
+  // context-menu item. Idempotent against double-invocation (e.g. a second
+  // menu click while the UI is already up): returns immediately if
+  // `state.regionSelect` is already set. On a completed drag, sends the
+  // selected rect (viewport CSS px) to background.js via
+  // `regionSelected`, which captures the tab and replies with a
+  // "previewImage" message.
+  function selectRegion() {
+    if (state.regionSelect) {
+      return { ok: true }; // already active
+    }
+
+    const host = document.createElement("div");
+    host.style.position = "fixed";
+    host.style.inset = "0";
+    host.style.zIndex = "2147483647";
+    host.style.cursor = "crosshair";
+
+    // Open shadow root so page CSS can never leak in (or out).
+    const shadow = host.attachShadow({ mode: "open" });
+
+    const style = document.createElement("style");
+    style.textContent = `
+      .surface {
+        position: absolute;
+        inset: 0;
+      }
+      .hint {
+        position: fixed;
+        top: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 10px 16px;
+        background: rgba(20, 20, 20, 0.85);
+        border-radius: 999px;
+        font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+        color: #fff;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+      .box {
+        position: absolute;
+        box-sizing: border-box;
+        border: 1.5px dashed #fff;
+        background: rgba(255, 255, 255, 0.15);
+        display: none;
+        pointer-events: none;
+      }
+      .size-label {
+        position: absolute;
+        bottom: 100%;
+        right: 0;
+        margin-bottom: 4px;
+        padding: 2px 6px;
+        background: rgba(20, 20, 20, 0.85);
+        border-radius: 4px;
+        font: 11px -apple-system, BlinkMacSystemFont, sans-serif;
+        color: #fff;
+        white-space: nowrap;
+      }
+    `;
+
+    const surface = document.createElement("div");
+    surface.className = "surface";
+
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent = "Drag to select an area — press Esc to cancel";
+
+    const box = document.createElement("div");
+    box.className = "box";
+    const sizeLabel = document.createElement("div");
+    sizeLabel.className = "size-label";
+    box.appendChild(sizeLabel);
+    surface.appendChild(box);
+
+    shadow.append(style, surface, hint);
+    document.documentElement.appendChild(host);
+
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+
+    function paintBox(x, y, w, h) {
+      box.style.left = `${x}px`;
+      box.style.top = `${y}px`;
+      box.style.width = `${w}px`;
+      box.style.height = `${h}px`;
+      sizeLabel.textContent = `${Math.round(w)} × ${Math.round(h)}`;
+    }
+
+    function onMouseDown(event) {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      dragging = true;
+      startX = event.clientX;
+      startY = event.clientY;
+      box.style.display = "block";
+      paintBox(startX, startY, 0, 0);
+    }
+
+    function onMouseMove(event) {
+      if (!dragging) {
+        return;
+      }
+      const x = Math.min(startX, event.clientX);
+      const y = Math.min(startY, event.clientY);
+      const w = Math.abs(event.clientX - startX);
+      const h = Math.abs(event.clientY - startY);
+      paintBox(x, y, w, h);
+    }
+
+    function onMouseUp(event) {
+      if (!dragging) {
+        return;
+      }
+      dragging = false;
+      const x = Math.min(startX, event.clientX);
+      const y = Math.min(startY, event.clientY);
+      const w = Math.abs(event.clientX - startX);
+      const h = Math.abs(event.clientY - startY);
+      removeRegionSelect();
+      if (w < 4 || h < 4) {
+        return; // too small to be a deliberate selection; treat as a cancel
+      }
+      // Two rAFs guarantee the just-removed selection UI is not painted in
+      // the frame `captureVisibleTab` grabs next.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          browser.runtime.sendMessage({ type: "regionSelected", rect: { x, y, w, h } });
+        });
+      });
+    }
+
+    function onDragStart(event) {
+      event.preventDefault();
+    }
+
+    surface.addEventListener("mousedown", onMouseDown);
+    surface.addEventListener("mousemove", onMouseMove);
+    surface.addEventListener("mouseup", onMouseUp);
+    surface.addEventListener("dragstart", onDragStart);
+
+    const onKeydown = (event) => {
+      if (event.key === "Escape") {
+        removeRegionSelect();
+      }
+    };
+    window.addEventListener("keydown", onKeydown, true);
+
+    state.regionSelect = { host, onKeydown };
+    return { ok: true };
+  }
+
+  // Idempotent: a no-op once the region-select UI is already torn down, so
+  // every teardown path (mouseup after a completed or too-small drag,
+  // Escape, and the next measure()) can call it unconditionally.
+  function removeRegionSelect() {
+    if (!state.regionSelect) {
+      return;
+    }
+    const { host, onKeydown } = state.regionSelect;
+    window.removeEventListener("keydown", onKeydown, true);
+    host.remove();
+    state.regionSelect = null;
   }
 
   function restore() {
