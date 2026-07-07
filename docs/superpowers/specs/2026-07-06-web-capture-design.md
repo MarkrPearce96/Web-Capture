@@ -28,6 +28,7 @@ An Xcode project with two targets:
    - `background.js` — non-persistent background script. Listens for the toolbar click, orchestrates the capture loop, performs `captureVisibleTab` calls.
    - `content.js` — injected on demand via `browser.scripting.executeScript`. Measures page dimensions, performs scrolling, hides/restores fixed and sticky elements and scrollbars, restores original scroll position, stitches frames onto a canvas, and shows the preview overlay with Download/Copy options.
    - `shared.js` — pure functions (scroll-step computation, filename generation, canvas-height cap) loaded by both scripts and unit-testable in Node.
+   - `pdf.js` — dependency-free multi-page PDF builder (A4 pages, JPEG-embedded), Node-tested.
 
 Note: Safari does not support the `browser.downloads` WebExtension API, so when the user clicks Download in the preview overlay, the save is triggered from the content script via an invisible `<a download>` anchor click on a blob URL — this saves to the Downloads folder with the chosen filename, with no dialog under Safari's default settings.
 
@@ -47,9 +48,9 @@ Stitching happens in the content script (not the background script) so each capt
 
 ## Output
 
-- Format: PNG at native device resolution (2x on Retina).
+- Format: captured at native device resolution (2x on Retina); Download exports the format chosen in the preview overlay's dropdown — PNG (default, lossless), JPEG with a 50–100% quality slider, or PDF paginated into A4 pages (image embedded as JPEG at 85%). The filename extension follows the chosen format (`.png` / `.jpg` / `.pdf`). Copy always places a PNG on the clipboard, regardless of the dropdown's selection.
 - The file is saved only when the user clicks Download in the preview overlay — via an anchor-click download to the Downloads folder (no save dialog under Safari's default download settings), using the same filename format. Copy places the PNG on the clipboard instead of saving a file. Dismissing the overlay without choosing either does neither.
-- Filename: `<host> <YYYY-MM-DD> at <HH.MM.SS>.png`, e.g. `example.com 2026-07-06 at 23.55.12.png`.
+- Filename: `<host> <YYYY-MM-DD> at <HH.MM.SS>.png`, e.g. `example.com 2026-07-06 at 23.55.12.png` (extension swapped to `.jpg`/`.pdf` when that format is chosen for Download).
 
 ## Error Handling
 

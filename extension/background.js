@@ -27,7 +27,7 @@ async function captureFullPage(tab) {
   // which lands in the error-badge path above.
   await browser.scripting.executeScript({
     target: { tabId: tab.id },
-    files: ["shared.js", "content.js"],
+    files: ["shared.js", "pdf.js", "content.js"],
   });
 
   try {
