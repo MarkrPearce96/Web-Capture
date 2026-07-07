@@ -302,6 +302,7 @@
       .image-area {
         overflow: auto;
         flex: 1;
+        overscroll-behavior: contain;
       }
       .image-wrapper {
         position: relative;
@@ -566,6 +567,20 @@
     shadow.append(style, backdrop, panel);
     document.documentElement.appendChild(host);
 
+    // Lock page scroll while the overlay is open — reaching the end of the
+    // preview's own scrollable image area must not chain into scrolling the
+    // page behind it. Saved as plain inline-style strings (not a
+    // before/after diff) so closeOverlay can restore exactly what was there,
+    // including "no inline value at all" (removeProperty).
+    const priorHtmlOverflow = document.documentElement.style.getPropertyValue("overflow");
+    const priorBodyOverflow = document.body
+      ? document.body.style.getPropertyValue("overflow")
+      : null;
+    document.documentElement.style.overflow = "hidden";
+    if (document.body) {
+      document.body.style.overflow = "hidden";
+    }
+
     const onKeydown = (event) => {
       if (event.key === "Escape") {
         closeOverlay();
@@ -573,7 +588,14 @@
     };
     window.addEventListener("keydown", onKeydown, true);
 
-    const overlayRecord = { host, url, onKeydown, annotator: null };
+    const overlayRecord = {
+      host,
+      url,
+      onKeydown,
+      annotator: null,
+      priorHtmlOverflow,
+      priorBodyOverflow,
+    };
     state.overlay = overlayRecord;
 
     // Wait until the preview image has actually loaded — createAnnotator
@@ -589,6 +611,90 @@
     annotator = createAnnotator({ img, sourceCanvas: canvas, wrapper, shadowRoot: shadow });
     panel.insertBefore(annotator.toolbar, buttonRow);
     overlayRecord.annotator = annotator;
+
+    // ---- pinch-to-zoom (trackpad pinch via Safari's non-standard gesture
+    // events, or ctrl+wheel as the emulated equivalent) ----------------
+    // Zoom factor 1 (fit width, current look) to 6, applied to the img's
+    // width (see setZoom below for why wrapper is sized to match
+    // explicitly rather than left to auto-fill imageArea); the annotator's
+    // `inset: 0` layer then follows the wrapper automatically, but its
+    // canvas backing store has to be re-synced (via refresh()) after every
+    // change since it isn't observing layout on its own. These listeners
+    // live entirely on overlay-internal elements (inside `host`), so —
+    // unlike the window keydown listener above — nothing needs to
+    // explicitly remove them at close: they die with the rest of the
+    // subtree when `host.remove()` runs.
+    let zoom = 1;
+
+    function setZoom(next, clientX, clientY) {
+      next = Math.min(6, Math.max(1, next));
+      if (Math.abs(next - zoom) < 0.001) {
+        return;
+      }
+      const rect = imageArea.getBoundingClientRect();
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
+      const ratio = next / zoom;
+      const newScrollLeft = (imageArea.scrollLeft + px) * ratio - px;
+      const newScrollTop = (imageArea.scrollTop + py) * ratio - py;
+      zoom = next;
+      // img.style.width is conceptually "(zoom * 100) + '%'" of the fit
+      // width (the base CSS rule stays `width: 100%` for the never-zoomed
+      // case) — expressed here in px, computed from imageArea's own width
+      // (stable, unaffected by the img/wrapper), rather than as a live
+      // percentage of `wrapper`. A percentage of `wrapper` would be
+      // self-referential once `wrapper` is also resized to match: wrapper's
+      // width would feed back into img's resolved width (which feeds back
+      // into wrapper's target width next time), compounding every call.
+      // `wrapper` is sized to match explicitly (not left to auto-fill)
+      // because its normal-flow "auto" width always fills imageArea and
+      // ignores an overflowing child's actual size — only its *height*
+      // auto-grows with in-flow content — so without this, the annotation
+      // layer (annot-layer is `inset: 0` of wrapper) would stay clipped to
+      // the un-zoomed width instead of covering the zoomed image.
+      const targetWidth = imageArea.clientWidth * zoom;
+      img.style.width = targetWidth + "px";
+      wrapper.style.width = targetWidth + "px";
+      imageArea.scrollLeft = newScrollLeft;
+      imageArea.scrollTop = newScrollTop;
+      annotator.refresh();
+    }
+
+    let startZoom = 1;
+    imageArea.addEventListener(
+      "gesturestart",
+      (e) => {
+        e.preventDefault();
+        startZoom = zoom;
+      },
+      { passive: false }
+    );
+    imageArea.addEventListener(
+      "gesturechange",
+      (e) => {
+        e.preventDefault();
+        setZoom(startZoom * e.scale, e.clientX, e.clientY);
+      },
+      { passive: false }
+    );
+    imageArea.addEventListener(
+      "gestureend",
+      (e) => {
+        e.preventDefault();
+      },
+      { passive: false }
+    );
+    imageArea.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.ctrlKey) {
+          return;
+        }
+        e.preventDefault();
+        setZoom(zoom * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+      },
+      { passive: false }
+    );
   }
 
   // Idempotent: a no-op when no overlay is open, so every close path (✕,
@@ -598,13 +704,29 @@
     if (!state.overlay) {
       return;
     }
-    const { host, url, onKeydown, annotator } = state.overlay;
+    const { host, url, onKeydown, annotator, priorHtmlOverflow, priorBodyOverflow } =
+      state.overlay;
     if (annotator) {
       annotator.destroy();
     }
     window.removeEventListener("keydown", onKeydown, true);
     URL.revokeObjectURL(url);
     host.remove();
+    if (priorHtmlOverflow) {
+      document.documentElement.style.overflow = priorHtmlOverflow;
+    } else {
+      document.documentElement.style.removeProperty("overflow");
+    }
+    // priorBodyOverflow is null (not just falsy) when there was no
+    // document.body to touch at open time — only restore it if we actually
+    // set it.
+    if (priorBodyOverflow !== null && document.body) {
+      if (priorBodyOverflow) {
+        document.body.style.overflow = priorBodyOverflow;
+      } else {
+        document.body.style.removeProperty("overflow");
+      }
+    }
     state.overlay = null;
   }
 

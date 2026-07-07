@@ -268,8 +268,11 @@ function annotStyleText() {
 // `wrapper` is a position: relative div (created by content.js) containing
 // the preview `img`; `sourceCanvas` is the full-resolution stitched capture
 // the `img` was rendered from. Returns { toolbar, hasAnnotations,
-// renderComposite, destroy }. `toolbar` is not appended here — content.js
-// places it above the image area.
+// renderComposite, destroy, refresh }. `toolbar` is not appended here —
+// content.js places it above the image area. `refresh` re-syncs the layer's
+// backing store and re-derives `scale` from the img's current
+// `clientWidth` — content.js calls it after changing the preview image's
+// zoom, the same way the window-resize listener does internally.
 function createAnnotator(options) {
   var img = options.img;
   var sourceCanvas = options.sourceCanvas;
@@ -571,6 +574,7 @@ function createAnnotator(options) {
     hasAnnotations: hasAnnotations,
     renderComposite: renderComposite,
     destroy: destroy,
+    refresh: resizeLayer,
   };
 }
 
