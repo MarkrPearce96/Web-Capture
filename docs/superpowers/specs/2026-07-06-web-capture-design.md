@@ -61,7 +61,8 @@ All three modes feed the same preview overlay and Download/Copy/format-dropdown 
 
 The preview overlay includes a markup toolbar (a row directly above the image area) for drawing on the captured image before exporting it:
 
-- **Tools**: Pen (freehand), Line, Arrow, Rectangle, Ellipse. Selecting a tool switches the image area from its normal scroll/pan behavior to drawing mode (crosshair cursor); clicking the active tool again deselects it and returns to normal scrolling. No tool is selected by default.
+- **Tools**: Select, Pen (freehand), Line, Arrow, Rectangle, Ellipse, Text. Selecting a tool switches the image area from its normal scroll/pan behavior to drawing mode (crosshair cursor); clicking the active tool again deselects it and returns to normal scrolling. No tool is selected by default.
+- **Text**: click to place a box, then type inline into an editor shown right on the image (auto-growing to fit, previewing the font/color/background live). Committing (clicking elsewhere, pressing Escape, blurring, or switching tools) finalizes the box; leaving it empty discards it instead. The selected box shows a floating options bar above it (below if there's no room above) for per-box text color, background color (or none), and font size, all applied immediately. Double-click a text box to re-edit it inline.
 - **Colors**: six swatches — red `#ff3b30` (default), yellow `#ffcc00`, green `#34c759`, blue `#007aff`, black `#000000`, white `#ffffff`.
 - **Stroke sizes**: three presets — S (2px), M (4px), L (8px), shown as small/medium/large filled dots.
 - **Undo** removes the most recent annotation; **Clear** removes all of them. Both are no-ops when there are no annotations.

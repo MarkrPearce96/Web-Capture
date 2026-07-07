@@ -590,6 +590,14 @@
 
     const onKeydown = (event) => {
       if (event.key === "Escape") {
+        // A text annotation's inline editor handles its own Escape (commit
+        // + close, see annotate.js) — let it, rather than closing the whole
+        // preview out from under it. `state.overlay`/`.annotator` are
+        // null-safe here since this listener can fire before the annotator
+        // (created async, after the preview image decodes) exists yet.
+        if (state.overlay && state.overlay.annotator && state.overlay.annotator.isEditingText && state.overlay.annotator.isEditingText()) {
+          return;
+        }
         closeOverlay();
       }
     };
