@@ -632,14 +632,22 @@ function createAnnotator(options) {
     layer.classList.toggle("annot-tool-text", selectedTool === "text");
   }
 
+  // Applies a tool's non-destructive state: updates selectedTool, toolbar UI,
+  // and layer classes/cursor. Does NOT clear activeText, freshSelection, or
+  // repaint. Used by selectTool and, after committing a text box, to switch
+  // to Select without losing the just-placed box's popup.
+  function applyToolState(toolId) {
+    selectedTool = toolId;
+    updateToolbarUI();
+  }
+
   function selectTool(toolId) {
     // Commit before switching so a half-typed box isn't silently dropped —
     // commitTextEditor() itself handles the empty-text-discards case.
     if (textEditorEl) {
       commitTextEditor();
     }
-    selectedTool = toolId;
-    updateToolbarUI();
+    applyToolState(toolId);
     var changed = false;
     if (freshSelection) {
       freshSelection = null;
@@ -1270,6 +1278,13 @@ function createAnnotator(options) {
     }
     activeText = annotation;
     showTextOptions(annotation);
+    // Auto-switch to Select tool after placing text, preserving the just-placed
+    // box's selection state (activeText, popup, freshSelection remain intact).
+    // Guard: only switch if Text tool is currently active; other paths (e.g.,
+    // Select tool's double-click re-edit) leave the tool unchanged.
+    if (selectedTool === "text") {
+      applyToolState("select");
+    }
     repaint();
   }
 
