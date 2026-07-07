@@ -24,9 +24,9 @@ An Xcode project with two targets:
 
 1. **Wrapper app (`Web Capture`)** — minimal macOS app required to host a Safari extension. Its only job is to exist and point the user to Safari's extension settings. No custom logic beyond the Xcode template.
 2. **Safari Web Extension (`Web Capture Extension`)** — plain JavaScript, Manifest V3, no frameworks or build step. Components:
-   - `manifest.json` — MV3 manifest. Permissions: `activeTab`, `scripting`. Toolbar action with icon, no popup.
-   - `background.js` — non-persistent background script. Listens for the toolbar click, orchestrates the capture loop, performs `captureVisibleTab` calls.
-   - `content.js` — injected on demand via `browser.scripting.executeScript`. Measures page dimensions, performs scrolling, hides/restores fixed and sticky elements and scrollbars, restores original scroll position, stitches frames onto a canvas, and shows the preview overlay with Download/Copy options.
+   - `manifest.json` — MV3 manifest. Permissions: `activeTab`, `scripting`, `contextMenus` (the latter for the right-click Visible Area / Selected Region menu items). Toolbar action with icon, no popup.
+   - `background.js` — non-persistent background script. Listens for the toolbar click and the context-menu items, orchestrates the capture loop (and the single-frame/region flows), performs `captureVisibleTab` calls. Registers its context menu items at top level on every wake, removing all first so re-registration never collides.
+   - `content.js` — injected on demand via `browser.scripting.executeScript`. Measures page dimensions, performs scrolling, hides/restores fixed and sticky elements and scrollbars, restores original scroll position, stitches frames onto a canvas, runs the drag-to-select region UI, and shows the preview overlay with Download/Copy options.
    - `shared.js` — pure functions (scroll-step computation, filename generation, canvas-height cap) loaded by both scripts and unit-testable in Node.
    - `pdf.js` — dependency-free multi-page PDF builder (A4 pages, JPEG-embedded), Node-tested.
 
@@ -45,6 +45,15 @@ Stitching happens in the content script (not the background script) so each capt
    - Background script calls `captureVisibleTab` (PNG data URL) and draws the frame onto the stitch canvas at the correct offset. The final frame is cropped so overlapping content is not duplicated. A bottom-center progress pill (bar plus percentage) shows capture progress while the loop runs; it is hidden at the instant each frame is captured so it never appears in the screenshot, and reappears for the next step. It is removed entirely when capture finishes or aborts.
 5. Content script restores hidden elements, scrollbars, and the original scroll position.
 6. Content script exports the canvas to a PNG blob and shows an in-page preview overlay (a shadow-DOM host appended to `document.documentElement`, dimmed backdrop, centered scrollable image panel). The user then chooses Download (saves the PNG via an anchor-click download), Copy (writes the PNG to the clipboard), or dismisses the overlay (✕, backdrop click, or Escape) without saving.
+
+## Capture Modes
+
+Left-click on the toolbar icon triggers the scroll-and-stitch full-page capture described above, unchanged. A right-click opens a context menu — on the toolbar icon where Safari supports the `action` menu context, and also on the page itself — with two additional modes:
+
+- **Visible Area**: a single instant frame of exactly what's on screen, no scrolling. The background script captures the visible tab *before* injecting anything, so nothing the extension adds (progress pill, overlay) can appear in the image, then injects the content script and hands it the frame to preview.
+- **Selected Region**: the content script shows a full-viewport drag-to-select overlay (dimmed crosshair cursor, dashed selection box with a live width × height label, a hint pill with Esc-to-cancel). Releasing the drag sends the selected rectangle back to the background script, which captures the visible tab and crops it to that rectangle at native (device) resolution — the crop math scales the viewport-CSS-px rectangle by the ratio between the captured frame's width and the viewport width, since Safari decides the capture's actual pixel resolution. A drag smaller than 4×4 CSS px is treated as a cancel; Esc at any time cancels.
+
+Both modes feed the same preview overlay and Download/Copy/format-dropdown options as the full-page flow — only the canvas that's handed to the overlay differs (a single cropped or full frame instead of a stitched multi-frame one).
 
 ## Output
 
