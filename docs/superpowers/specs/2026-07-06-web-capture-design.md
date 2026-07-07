@@ -60,7 +60,7 @@ Stitching happens in the content script (not the background script) so each capt
 
 ## Testing
 
-- Manual test matrix: a short page (no scrolling needed), a long article page, a page with a sticky header (verify no repeats), a lazy-loading page (verify images render), a Retina display check (verify sharpness), and a restricted page (verify the error badge).
+- Manual test matrix: a short page (no scrolling needed), a long article page, a page with a sticky header (verify no repeats), a lazy-loading page (verify images render), a Retina display check (verify sharpness), a restricted page (verify the error badge), and the preview overlay (verify Download saves the file, Copy puts the PNG on the clipboard, and ✕ / backdrop click / Escape dismiss without saving).
 - JavaScript logic that is testable in isolation (filename generation, scroll-step computation, frame-crop math) is written as pure functions so it can be sanity-checked without Safari.
 
 ## One-Time Setup After Building

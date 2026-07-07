@@ -288,7 +288,12 @@
     downloadBtn.addEventListener("click", () => {
       downloadBlob(blob, filename);
       downloadBtn.textContent = "Saved ✓";
-      setTimeout(closeOverlay, 600);
+      const mine = state.overlay;
+      setTimeout(() => {
+        if (state.overlay === mine) {
+          closeOverlay();
+        }
+      }, 600);
     });
 
     const copyBtn = document.createElement("button");
@@ -300,7 +305,12 @@
         // gesture for the Clipboard API.
         await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
         copyBtn.textContent = "Copied ✓";
-        setTimeout(closeOverlay, 600);
+        const mine = state.overlay;
+        setTimeout(() => {
+          if (state.overlay === mine) {
+            closeOverlay();
+          }
+        }, 600);
       } catch (err) {
         copyBtn.textContent = "Copy failed";
         console.error("Web Capture: copy to clipboard failed", err);
