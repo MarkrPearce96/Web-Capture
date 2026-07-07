@@ -287,6 +287,9 @@ function annotStyleText() {
     .annot-layer.annot-active.annot-tool-select.annot-grabbing {
       cursor: move;
     }
+    .annot-layer.annot-active.annot-over-fresh {
+      cursor: move;
+    }
   `;
 }
 
@@ -458,6 +461,7 @@ function createAnnotator(options) {
     updateToolbarUI();
     if (freshSelection) {
       freshSelection = null;
+      updateFreshHoverCursor(null);
       repaint();
     }
   }
@@ -478,6 +482,7 @@ function createAnnotator(options) {
     }
     annotations.pop();
     freshSelection = null;
+    updateFreshHoverCursor(null);
     repaint();
   }
 
@@ -487,6 +492,7 @@ function createAnnotator(options) {
     }
     annotations = [];
     freshSelection = null;
+    updateFreshHoverCursor(null);
     repaint();
   }
 
@@ -635,6 +641,11 @@ function createAnnotator(options) {
 
   // ---- pointer flow ----
 
+  function updateFreshHoverCursor(pt) {
+    var over = !!(freshSelection && pt && hitAnnotation(freshSelection, pt.x, pt.y));
+    layer.classList.toggle("annot-over-fresh", over);
+  }
+
   function isNonDegenerate(a) {
     if (a.tool === "pen") {
       return a.points.length >= 2;
@@ -675,6 +686,7 @@ function createAnnotator(options) {
       return;
     }
     freshSelection = null;
+    updateFreshHoverCursor(null);
 
     layer.setPointerCapture(e.pointerId);
     activePointerId = e.pointerId;
@@ -704,7 +716,13 @@ function createAnnotator(options) {
       repaint();
       return;
     }
-    if (!inProgress || e.pointerId !== activePointerId) {
+    if (!inProgress) {
+      // Plain hover: update fresh-selection cursor
+      var pt = toNatural(e);
+      updateFreshHoverCursor(pt);
+      return;
+    }
+    if (e.pointerId !== activePointerId) {
       return;
     }
     var pt = toNatural(e);
@@ -731,6 +749,7 @@ function createAnnotator(options) {
   }
 
   function onPointerUp(e) {
+    var pt = toNatural(e);
     if (grabbed && e.pointerId === activePointerId) {
       // The move is final on release — no undo entry is created for it.
       // Undo (see undo() above) only ever pops the most recently CREATED
@@ -746,6 +765,7 @@ function createAnnotator(options) {
       // the Select tool happening to grab the same object.
       if (releasedAnnotation === freshSelection) {
         freshSelection = null;
+        updateFreshHoverCursor(null);
       }
       repaint();
       return;
@@ -759,6 +779,7 @@ function createAnnotator(options) {
     if (isNonDegenerate(finished)) {
       annotations.push(finished);
       freshSelection = finished;
+      updateFreshHoverCursor(pt);
     }
     repaint();
   }
@@ -795,6 +816,7 @@ function createAnnotator(options) {
     }
     destroyed = true;
     freshSelection = null;
+    updateFreshHoverCursor(null);
     window.removeEventListener("resize", onResize);
     layer.remove();
   }
