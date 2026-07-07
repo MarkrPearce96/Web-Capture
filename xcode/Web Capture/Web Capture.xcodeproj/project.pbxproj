@@ -23,6 +23,8 @@
 		4D71F6562FFC0E4C0009059C /* content.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6512FFC0E4C0009059C /* content.js */; };
 		4D71F6572FFC0E4C0009059C /* shared.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6522FFC0E4C0009059C /* shared.js */; };
 		4D71F6582FFC0E4C0009059C /* pdf.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6592FFC0E4C0009059C /* pdf.js */; };
+		4D71F65A2FFC0E4C0009059C /* popup.html in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F65C2FFC0E4C0009059C /* popup.html */; };
+		4D71F65B2FFC0E4C0009059C /* popup.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F65D2FFC0E4C0009059C /* popup.js */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +71,8 @@
 		4D71F6512FFC0E4C0009059C /* content.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = content.js; path = ../../../extension/content.js; sourceTree = "<group>"; };
 		4D71F6522FFC0E4C0009059C /* shared.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = shared.js; path = ../../../extension/shared.js; sourceTree = "<group>"; };
 		4D71F6592FFC0E4C0009059C /* pdf.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = pdf.js; path = ../../../extension/pdf.js; sourceTree = "<group>"; };
+		4D71F65C2FFC0E4C0009059C /* popup.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = popup.html; path = ../../../extension/popup.html; sourceTree = "<group>"; };
+		4D71F65D2FFC0E4C0009059C /* popup.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = popup.js; path = ../../../extension/popup.js; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -150,6 +154,8 @@
 				4D71F6512FFC0E4C0009059C /* content.js */,
 				4D71F6522FFC0E4C0009059C /* shared.js */,
 				4D71F6592FFC0E4C0009059C /* pdf.js */,
+				4D71F65C2FFC0E4C0009059C /* popup.html */,
+				4D71F65D2FFC0E4C0009059C /* popup.js */,
 			);
 			name = Resources;
 			path = "Web Capture Extension";
@@ -260,6 +266,8 @@
 				4D71F6572FFC0E4C0009059C /* shared.js in Resources */,
 				4D71F6532FFC0E4C0009059C /* background.js in Resources */,
 				4D71F6582FFC0E4C0009059C /* pdf.js in Resources */,
+				4D71F65A2FFC0E4C0009059C /* popup.html in Resources */,
+				4D71F65B2FFC0E4C0009059C /* popup.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

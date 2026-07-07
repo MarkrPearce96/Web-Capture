@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Web Capture</title>
+    <style>
+      body {
+        width: 240px;
+        margin: 0;
+        font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+        background: #f6f6f7;
+        color: #1c1c1e;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #28282a;
+          color: #eee;
+        }
+      }
+
+      .header {
+        padding: 10px 14px 4px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #8a8a8e;
+      }
+
+      .options {
+        padding-bottom: 6px;
+      }
+
+      .option {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: calc(100% - 12px);
+        box-sizing: border-box;
+        margin: 0 6px;
+        padding: 8px 14px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .option:hover {
+        background: rgba(0, 0, 0, 0.06);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .option:hover {
+          background: rgba(255, 255, 255, 0.08);
+        }
+      }
+
+      .glyph {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        color: #2273f2;
+      }
+
+      .glyph svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .text {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .label {
+        font-size: 13px;
+        font-weight: 500;
+      }
+
+      .sublabel {
+        font-size: 11px;
+        color: #8a8a8e;
+        margin-top: 1px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">Web Capture</div>
+    <div class="options">
+      <button class="option" data-mode="full" type="button">
+        <span class="glyph">
+          <svg viewBox="0 0 20 20">
+            <rect x="3" y="1.5" width="14" height="17" rx="2.5" />
+            <line x1="6" y1="7" x2="14" y2="7" />
+            <line x1="6" y1="10" x2="14" y2="10" />
+            <line x1="6" y1="13" x2="14" y2="13" />
+          </svg>
+        </span>
+        <span class="text">
+          <span class="label">Full Page</span>
+          <span class="sublabel">Scrolls and captures everything</span>
+        </span>
+      </button>
+      <button class="option" data-mode="visible" type="button">
+        <span class="glyph">
+          <svg viewBox="0 0 20 20">
+            <rect x="2" y="3" width="16" height="14" rx="2" />
+            <line x1="2" y1="7" x2="18" y2="7" />
+          </svg>
+        </span>
+        <span class="text">
+          <span class="label">Visible Area</span>
+          <span class="sublabel">Just what's on screen</span>
+        </span>
+      </button>
+      <button class="option" data-mode="region" type="button">
+        <span class="glyph">
+          <svg viewBox="0 0 20 20">
+            <rect x="2.5" y="2.5" width="15" height="15" rx="1.5" stroke-dasharray="2.5 2.5" />
+            <line x1="10" y1="7.5" x2="10" y2="12.5" />
+            <line x1="7.5" y1="10" x2="12.5" y2="10" />
+          </svg>
+        </span>
+        <span class="text">
+          <span class="label">Select Region</span>
+          <span class="sublabel">Drag to choose an area</span>
+        </span>
+      </button>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
