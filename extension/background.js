@@ -35,11 +35,11 @@ async function captureFullPage(tab) {
     const steps = computeScrollSteps(metrics.pageHeight, metrics.viewportHeight);
 
     for (let i = 0; i < steps.length; i++) {
-      await setBadge(tab.id, formatProgress(i + 1, steps.length));
       const { y } = await sendToTab(tab.id, {
         type: "scrollTo",
         y: steps[i],
         hideFixed: i > 0,
+        progress: { current: i + 1, total: steps.length },
       });
       if (y * metrics.dpr >= MAX_CANVAS_PX) {
         break; // page is taller than the canvas cap; keep what we have
@@ -54,7 +54,6 @@ async function captureFullPage(tab) {
   } finally {
     // Idempotent: a no-op after a successful finish, restores the page on
     // any abort. Its own failure must not mask the original error.
-    await setBadge(tab.id, "");
     await sendToTab(tab.id, { type: "restore" }).catch(() => {});
   }
 }
@@ -78,10 +77,3 @@ async function showErrorBadge(tabId) {
   }
 }
 
-async function setBadge(tabId, text) {
-  try {
-    await browser.action.setBadgeText({ text, tabId });
-  } catch {
-    // Badge is best-effort; never let it break a capture.
-  }
-}

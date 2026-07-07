@@ -24,6 +24,7 @@
     dpr: 1,
     restored: true,
     overlay: null, // { host, url, onKeydown } while the preview overlay is open
+    progressPill: null, // { host, bar, label } while a capture is in progress
   };
 
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -62,6 +63,7 @@
     // position: fixed and would otherwise be visible in every frame of the
     // new capture if it were still around when dimensions are measured.
     closeOverlay();
+    removeProgressPill();
     if (!state.restored) {
       // Belt-and-braces: a stale, unrestored capture (e.g. from a click that
       // never reached "finish") must never leak hidden elements or a
@@ -90,14 +92,19 @@
   }
 
 
-  async function scrollToStep({ y, hideFixed }) {
+  async function scrollToStep({ y, hideFixed, progress }) {
+    if (progress) {
+      updateProgressPill(progress.current, progress.total);
+    }
     window.scrollTo(0, y);
     await settle(SETTLE_MS);
     if (hideFixed) {
       hideFixedElements();
       await settle(80);
     }
-    return { y: Math.round(window.scrollY) };
+    const result = { y: Math.round(window.scrollY) };
+    hideProgressPill();
+    return result;
   }
 
   // Fixed and sticky elements would repeat in every frame; hide them so they
@@ -352,11 +359,102 @@
     state.overlay = null;
   }
 
+  // Creates (on first call) or updates the bottom-center progress pill shown
+  // while a capture is running. Must be hidden (not just left alone) before
+  // each `captureVisibleTab` call — see `hideProgressPill()` — so it never
+  // appears in a captured frame.
+  function updateProgressPill(current, total) {
+    const pct = Math.round((current / total) * 100);
+    if (!state.progressPill) {
+      const host = document.createElement("div");
+      host.style.position = "fixed";
+      host.style.left = "50%";
+      host.style.transform = "translateX(-50%)";
+      host.style.bottom = "24px";
+      host.style.zIndex = "2147483647";
+
+      const shadow = host.attachShadow({ mode: "open" });
+      const style = document.createElement("style");
+      style.textContent = `
+        .pill {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          width: 240px;
+          box-sizing: border-box;
+          padding: 10px 16px;
+          background: rgba(20, 20, 20, 0.85);
+          border-radius: 999px;
+          font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+          color: #fff;
+        }
+        .track {
+          flex: 1;
+          width: 160px;
+          height: 6px;
+          background: rgba(255, 255, 255, 0.25);
+          border-radius: 999px;
+          overflow: hidden;
+        }
+        .fill {
+          height: 100%;
+          width: 0%;
+          background: #fff;
+          border-radius: 999px;
+          transition: width 0.2s;
+        }
+        .label {
+          flex: none;
+          white-space: nowrap;
+        }
+      `;
+
+      const pill = document.createElement("div");
+      pill.className = "pill";
+      const track = document.createElement("div");
+      track.className = "track";
+      const bar = document.createElement("div");
+      bar.className = "fill";
+      track.appendChild(bar);
+      const label = document.createElement("span");
+      label.className = "label";
+      pill.append(track, label);
+      shadow.append(style, pill);
+      document.documentElement.appendChild(host);
+
+      state.progressPill = { host, bar, label };
+    }
+    const { host, bar, label } = state.progressPill;
+    bar.style.width = `${pct}%`;
+    label.textContent = formatProgress(current, total);
+    host.style.visibility = "visible";
+  }
+
+  // Hides (does not remove) the pill so it's gone at the instant
+  // `captureVisibleTab` fires; `updateProgressPill` makes it visible again at
+  // the next step.
+  function hideProgressPill() {
+    if (state.progressPill) {
+      state.progressPill.host.style.visibility = "hidden";
+    }
+  }
+
+  // Idempotent: tears the pill down entirely once a capture finishes or
+  // aborts, so a stale pill never leaks into a later capture.
+  function removeProgressPill() {
+    if (!state.progressPill) {
+      return;
+    }
+    state.progressPill.host.remove();
+    state.progressPill = null;
+  }
+
   function restore() {
     if (state.restored) {
       return { ok: true };
     }
     state.restored = true;
+    removeProgressPill();
     for (const { el, priorValue, priorPriority } of state.hidden) {
       if (priorValue) {
         el.style.setProperty("visibility", priorValue, priorPriority);
