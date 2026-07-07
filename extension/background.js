@@ -3,53 +3,39 @@
 const BADGE_CLEAR_MS = 2500;
 
 // Tabs with a capture currently in flight. Guards against a second
-// icon-click mid-capture, which would send a second "measure" and wipe
+// popup click mid-capture, which would send a second "measure" and wipe
 // state.hidden / corrupt the scroll-position record in content.js.
 const inFlightTabs = new Set();
 
-// Non-persistent background: this top-level code re-runs on every wake, so
-// the menu items must be torn down first or re-registration throws on the
-// duplicate id.
-browser.contextMenus
-  .removeAll()
-  .then(() => {
-    browser.contextMenus.create({
-      id: "capture-visible",
-      title: "Capture Visible Area",
-      contexts: ["action", "page"],
-    });
-    browser.contextMenus.create({
-      id: "capture-region",
-      title: "Capture Selected Region",
-      contexts: ["action", "page"],
-    });
-  })
-  .catch((err) => console.error("Web Capture: menu setup failed:", err));
-
-browser.action.onClicked.addListener(async (tab) => {
-  if (inFlightTabs.has(tab.id)) {
-    return; // a capture is already running for this tab; ignore the click
+// The popup (see popup.js) sends "captureRequest" for all three modes; the
+// content script sends "regionSelected" once the user finishes dragging a
+// region (see content.js's "selectRegion" handler). The latter isn't guarded
+// by handleCaptureRequest's in-flight tracking since it fires later, on its
+// own message — so it needs its own inFlightTabs guard.
+browser.runtime.onMessage.addListener((message, sender) => {
+  if (!message) {
+    return; // not ours; let other listeners (if any) handle it
   }
-  inFlightTabs.add(tab.id);
-  try {
-    await captureFullPage(tab);
-  } catch (err) {
-    console.error("Web Capture failed:", err);
-    await showErrorBadge(tab.id);
-  } finally {
-    inFlightTabs.delete(tab.id);
+  if (message.type === "regionSelected" && sender.tab) {
+    return handleRegionSelected(message, sender.tab);
+  }
+  if (message.type === "captureRequest") {
+    return handleCaptureRequest(message.mode);
   }
 });
 
-browser.contextMenus.onClicked.addListener(async (info, tab) => {
+async function handleCaptureRequest(mode) {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab || inFlightTabs.has(tab.id)) {
-    return; // no tab context, or a capture is already running for this tab
+    return; // no active tab, or a capture is already running for this tab
   }
   inFlightTabs.add(tab.id);
   try {
-    if (info.menuItemId === "capture-visible") {
+    if (mode === "full") {
+      await captureFullPage(tab);
+    } else if (mode === "visible") {
       await captureVisibleArea(tab);
-    } else if (info.menuItemId === "capture-region") {
+    } else if (mode === "region") {
       await startRegionSelect(tab);
     }
   } catch (err) {
@@ -58,18 +44,7 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
   } finally {
     inFlightTabs.delete(tab.id);
   }
-});
-
-// The content script sends this once the user finishes dragging a region
-// (see content.js's "selectRegion" handler). Not guarded by the
-// contextMenus.onClicked in-flight tracking above since it fires later, on
-// its own message — so it needs its own inFlightTabs guard.
-browser.runtime.onMessage.addListener((message, sender) => {
-  if (!message || message.type !== "regionSelected" || !sender.tab) {
-    return; // not ours; let other listeners (if any) handle it
-  }
-  return handleRegionSelected(message, sender.tab);
-});
+}
 
 async function handleRegionSelected(message, tab) {
   if (inFlightTabs.has(tab.id)) {
