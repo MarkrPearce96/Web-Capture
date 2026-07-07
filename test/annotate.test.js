@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { arrowHeadPoints } = require("../extension/annotate.js");
+const { arrowHeadPoints, distancePointToSegment } = require("../extension/annotate.js");
 
 test("arrowHeadPoints: horizontal arrow barbs sit ~91.34px back, ±5px off the shaft", () => {
   const barbs = arrowHeadPoints(0, 0, 100, 0, 10);
@@ -35,4 +35,20 @@ test("arrowHeadPoints: vertical arrow barbs are symmetric about the shaft and bo
   for (const b of barbs) {
     assert.ok(b.y < 50);
   }
+});
+
+test("distancePointToSegment: a point on the segment is distance 0", () => {
+  assert.equal(distancePointToSegment(5, 0, 0, 0, 10, 0), 0);
+});
+
+test("distancePointToSegment: a point beyond an endpoint clamps to that endpoint", () => {
+  assert.equal(distancePointToSegment(13, 4, 0, 0, 10, 0), 5);
+});
+
+test("distancePointToSegment: perpendicular distance to the middle of the segment", () => {
+  assert.equal(distancePointToSegment(5, 7, 0, 0, 10, 0), 7);
+});
+
+test("distancePointToSegment: a degenerate zero-length segment is just distance to the point", () => {
+  assert.equal(distancePointToSegment(3, 4, 0, 0, 0, 0), 5);
 });

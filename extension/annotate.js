@@ -23,6 +23,21 @@ function arrowHeadPoints(x1, y1, x2, y2, headLength) {
   ];
 }
 
+// Distance from point (px,py) to the segment (x1,y1)-(x2,y2). Used by the
+// Select tool's hit-testing (see onPointerDown / hitTest below): every
+// tool's stroke geometry reduces to one or more segments (or a single point
+// for a degenerate one-point pen stroke, handled by the lengthSq === 0
+// clamp), so this one function covers pen/line/arrow hit-testing.
+function distancePointToSegment(px, py, x1, y1, x2, y2) {
+  var dx = x2 - x1;
+  var dy = y2 - y1;
+  var lengthSq = dx * dx + dy * dy;
+  var t = lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lengthSq));
+  var cx = x1 + t * dx;
+  var cy = y1 + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
 // ---- Painting -------------------------------------------------------------
 // Shared by the live drawing layer (repaint, in natural-px-scaled device
 // coordinates) and renderComposite (identity transform, also natural px) —
@@ -121,6 +136,12 @@ var ANNOT_SIZES = [
 
 var ANNOT_TOOLS = [
   {
+    id: "select",
+    label: "Select",
+    icon:
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></svg>',
+  },
+  {
     id: "pen",
     label: "Pen",
     icon:
@@ -148,7 +169,7 @@ var ANNOT_TOOLS = [
     id: "ellipse",
     label: "Ellipse",
     icon:
-      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="12" rx="9" ry="6"/></svg>',
+      '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10" cy="10" r="6.5"/></svg>',
   },
 ];
 
@@ -260,6 +281,12 @@ function annotStyleText() {
       pointer-events: auto;
       cursor: crosshair;
     }
+    .annot-layer.annot-active.annot-tool-select {
+      cursor: default;
+    }
+    .annot-layer.annot-active.annot-tool-select.annot-grabbing {
+      cursor: move;
+    }
   `;
 }
 
@@ -282,6 +309,12 @@ function createAnnotator(options) {
   var annotations = [];
   var inProgress = null;
   var activePointerId = null;
+  // Set while the Select tool has grabbed an annotation (from pointerdown to
+  // pointerup/pointercancel): { annotation, lastX, lastY } in natural px.
+  // Drag-to-move only — there's no persistent "selected annotation" state
+  // once the pointer is released, so this doubles as "is something being
+  // dragged right now".
+  var grabbed = null;
   var selectedTool = null;
   var selectedColor = ANNOT_COLORS[0];
   var selectedSizeCssPx = ANNOT_SIZES[1].cssPx; // M, a reasonable middle default
@@ -409,6 +442,7 @@ function createAnnotator(options) {
       sizeButtons[size.cssPx].classList.toggle("annot-selected", size.cssPx === selectedSizeCssPx);
     });
     layer.classList.toggle("annot-active", !!selectedTool);
+    layer.classList.toggle("annot-tool-select", selectedTool === "select");
   }
 
   function selectTool(toolId) {
@@ -471,6 +505,106 @@ function createAnnotator(options) {
     if (inProgress) {
       drawAnnotation(ctx, inProgress);
     }
+    if (grabbed) {
+      drawSelectionCue(ctx, grabbed.annotation);
+    }
+  }
+
+  // Dashed selection cue around a grabbed annotation, drawn after everything
+  // else so it always sits on top. `ctx` is already under repaint's
+  // dpr*scale transform (natural-px coordinate space), so a 1 CSS px dash
+  // needs a natural-px line width of 1/scale.
+  function drawSelectionCue(ctx, a) {
+    var box = annotationBoundingBox(a);
+    ctx.save();
+    ctx.setLineDash([4 / scale, 4 / scale]);
+    ctx.lineWidth = 1 / scale;
+    ctx.strokeStyle = "#2273f2";
+    ctx.strokeRect(box.x, box.y, box.w, box.h);
+    ctx.restore();
+  }
+
+  function annotationBoundingBox(a) {
+    if (a.tool === "pen") {
+      var minX = a.points[0].x;
+      var maxX = a.points[0].x;
+      var minY = a.points[0].y;
+      var maxY = a.points[0].y;
+      for (var i = 1; i < a.points.length; i++) {
+        minX = Math.min(minX, a.points[i].x);
+        maxX = Math.max(maxX, a.points[i].x);
+        minY = Math.min(minY, a.points[i].y);
+        maxY = Math.max(maxY, a.points[i].y);
+      }
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+    var x = Math.min(a.x0, a.x1);
+    var y = Math.min(a.y0, a.y1);
+    return { x: x, y: y, w: Math.abs(a.x1 - a.x0), h: Math.abs(a.y1 - a.y0) };
+  }
+
+  // ---- Select tool: hit-testing + move ----
+
+  // Topmost-first (later-drawn annotations are visually on top), all
+  // tolerances in natural px per-annotation: half its stroke width plus an
+  // 8 CSS px fudge factor so thin strokes are still easy to grab.
+  function hitTest(pt) {
+    for (var i = annotations.length - 1; i >= 0; i--) {
+      var a = annotations[i];
+      var tol = a.width / 2 + 8 / scale;
+      if (a.tool === "pen") {
+        if (hitPen(a, pt, tol)) {
+          return a;
+        }
+      } else if (a.tool === "line" || a.tool === "arrow") {
+        if (distancePointToSegment(pt.x, pt.y, a.x0, a.y0, a.x1, a.y1) <= tol) {
+          return a;
+        }
+      } else if (a.tool === "rect" || a.tool === "ellipse") {
+        if (hitBox(a, pt, tol)) {
+          return a;
+        }
+      }
+    }
+    return null;
+  }
+
+  function hitPen(a, pt, tol) {
+    var points = a.points;
+    if (points.length < 2) {
+      var only = points[0];
+      return Math.hypot(pt.x - only.x, pt.y - only.y) <= tol;
+    }
+    for (var i = 0; i < points.length - 1; i++) {
+      if (distancePointToSegment(pt.x, pt.y, points[i].x, points[i].y, points[i + 1].x, points[i + 1].y) <= tol) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Simple containment inside the normalized bounding box expanded by tol —
+  // intentionally generous (no exact ellipse-boundary math).
+  function hitBox(a, pt, tol) {
+    var minX = Math.min(a.x0, a.x1) - tol;
+    var maxX = Math.max(a.x0, a.x1) + tol;
+    var minY = Math.min(a.y0, a.y1) - tol;
+    var maxY = Math.max(a.y0, a.y1) + tol;
+    return pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY;
+  }
+
+  function translateAnnotation(a, dx, dy) {
+    if (a.tool === "pen") {
+      for (var i = 0; i < a.points.length; i++) {
+        a.points[i].x += dx;
+        a.points[i].y += dy;
+      }
+      return;
+    }
+    a.x0 += dx;
+    a.y0 += dy;
+    a.x1 += dx;
+    a.y1 += dy;
   }
 
   // ---- pointer flow ----
@@ -487,9 +621,23 @@ function createAnnotator(options) {
       return;
     }
     e.preventDefault();
+    var pt = toNatural(e);
+
+    if (selectedTool === "select") {
+      var hit = hitTest(pt);
+      if (!hit) {
+        return;
+      }
+      layer.setPointerCapture(e.pointerId);
+      activePointerId = e.pointerId;
+      grabbed = { annotation: hit, lastX: pt.x, lastY: pt.y };
+      layer.classList.add("annot-grabbing");
+      repaint();
+      return;
+    }
+
     layer.setPointerCapture(e.pointerId);
     activePointerId = e.pointerId;
-    var pt = toNatural(e);
     var widthNatural = selectedSizeCssPx / scale;
     if (selectedTool === "pen") {
       inProgress = { tool: "pen", color: selectedColor, width: widthNatural, points: [pt] };
@@ -508,6 +656,14 @@ function createAnnotator(options) {
   }
 
   function onPointerMove(e) {
+    if (grabbed && e.pointerId === activePointerId) {
+      var gpt = toNatural(e);
+      translateAnnotation(grabbed.annotation, gpt.x - grabbed.lastX, gpt.y - grabbed.lastY);
+      grabbed.lastX = gpt.x;
+      grabbed.lastY = gpt.y;
+      repaint();
+      return;
+    }
     if (!inProgress || e.pointerId !== activePointerId) {
       return;
     }
@@ -515,13 +671,38 @@ function createAnnotator(options) {
     if (inProgress.tool === "pen") {
       inProgress.points.push(pt);
     } else {
-      inProgress.x1 = pt.x;
-      inProgress.y1 = pt.y;
+      var x1 = pt.x;
+      var y1 = pt.y;
+      // Shift-constrain rect/ellipse drags to a square: keep the drag's
+      // signed direction (which corner it's dragged towards) but force
+      // |dx| and |dy| to match, using whichever is currently larger.
+      // Lines/arrows/pen are unaffected.
+      if (e.shiftKey && (inProgress.tool === "rect" || inProgress.tool === "ellipse")) {
+        var dx = x1 - inProgress.x0;
+        var dy = y1 - inProgress.y0;
+        var side = Math.max(Math.abs(dx), Math.abs(dy));
+        x1 = inProgress.x0 + (dx < 0 ? -side : side);
+        y1 = inProgress.y0 + (dy < 0 ? -side : side);
+      }
+      inProgress.x1 = x1;
+      inProgress.y1 = y1;
     }
     repaint();
   }
 
   function onPointerUp(e) {
+    if (grabbed && e.pointerId === activePointerId) {
+      // The move is final on release — no undo entry is created for it.
+      // Undo (see undo() above) only ever pops the most recently CREATED
+      // annotation off the end of `annotations`; moving an existing one
+      // in place doesn't touch that stack, so Undo after a move removes
+      // whatever was last drawn, not the move itself.
+      grabbed = null;
+      activePointerId = null;
+      layer.classList.remove("annot-grabbing");
+      repaint();
+      return;
+    }
     if (!inProgress || e.pointerId !== activePointerId) {
       return;
     }
@@ -579,5 +760,5 @@ function createAnnotator(options) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { arrowHeadPoints };
+  module.exports = { arrowHeadPoints, distancePointToSegment };
 }

@@ -378,15 +378,22 @@
         right: 12px;
         width: 28px;
         height: 28px;
+        min-width: 28px;
+        min-height: 28px;
         padding: 0;
         border-radius: 50%;
-        background: rgba(0, 0, 0, 0.08);
-        color: #333;
+        border: 1.5px solid rgba(255, 255, 255, 0.9);
+        background: rgba(0, 0, 0, 0.55);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+        color: #fff;
         font-size: 15px;
         line-height: 1;
         display: flex;
         align-items: center;
         justify-content: center;
+      }
+      .close:hover {
+        background: rgba(0, 0, 0, 0.75);
       }
     `;
 
