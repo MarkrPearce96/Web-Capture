@@ -583,7 +583,7 @@
       return;
     }
     annotator = createAnnotator({ img, sourceCanvas: canvas, wrapper, shadowRoot: shadow });
-    panel.insertBefore(annotator.toolbar, imageArea);
+    panel.insertBefore(annotator.toolbar, optionsRow);
     overlayRecord.annotator = annotator;
   }
 

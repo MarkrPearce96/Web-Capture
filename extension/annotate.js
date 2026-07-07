@@ -158,9 +158,11 @@ function annotStyleText() {
       display: flex;
       align-items: center;
       gap: 10px;
+      flex-wrap: wrap;
+      row-gap: 8px;
       padding: 8px 12px;
       font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
-      border-bottom: 1px solid #e2e2e2;
+      border-top: 1px solid rgba(0,0,0,0.08);
       flex: none;
     }
     .annot-group {
