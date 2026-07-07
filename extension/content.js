@@ -243,10 +243,31 @@
 
   // Builds and shows the in-page preview overlay for a finished capture. The
   // only call site is `finish()`. `canvas` is the full-resolution stitched
-  // capture (kept around for JPEG re-encoding and PDF paging); `blob` is
-  // always the PNG export, used for the preview `<img>` and the Copy button.
-  function showOverlay(canvas, blob, filename) {
+  // capture (kept around for JPEG re-encoding, PDF paging, and as the base
+  // layer for baking in annotations); `blob` is always the PNG export, used
+  // for the preview `<img>` and (when there are no annotations) the Copy
+  // button. Async because it waits for the preview image to finish loading
+  // (needed for the annotator's coordinate math) before wiring up markup
+  // tools; not awaited by its callers (fire-and-forget), matching the rest
+  // of this file's message-handler contracts.
+  async function showOverlay(canvas, blob, filename) {
     const url = URL.createObjectURL(blob);
+    let annotator = null;
+
+    // Returns the canvas to export from: the plain capture when there are no
+    // annotations, or a freshly-composited canvas (capture + annotations
+    // baked in at full resolution) otherwise. Used by every export path
+    // (PNG/JPEG/PDF download and Copy) so annotations always end up in the
+    // saved/copied output.
+    function exportCanvas() {
+      return annotator && annotator.hasAnnotations() ? annotator.renderComposite() : canvas;
+    }
+
+    async function exportPngBlob() {
+      return annotator && annotator.hasAnnotations()
+        ? canvasToBlob(exportCanvas(), "image/png")
+        : blob;
+    }
 
     const host = document.createElement("div");
     host.style.position = "fixed";
@@ -281,6 +302,9 @@
       .image-area {
         overflow: auto;
         flex: 1;
+      }
+      .image-wrapper {
+        position: relative;
       }
       .image-area img {
         width: 100%;
@@ -373,9 +397,12 @@
 
     const imageArea = document.createElement("div");
     imageArea.className = "image-area";
+    const wrapper = document.createElement("div");
+    wrapper.className = "image-wrapper";
     const img = document.createElement("img");
     img.src = url;
-    imageArea.appendChild(img);
+    wrapper.appendChild(img);
+    imageArea.appendChild(wrapper);
 
     const optionsRow = document.createElement("div");
     optionsRow.className = "options-row";
@@ -434,7 +461,7 @@
       const format = formatSelect.value;
 
       if (format === "png") {
-        downloadBlob(blob, filename);
+        downloadBlob(await exportPngBlob(), filename);
         downloadBtn.textContent = "Saved ✓";
         const mine = state.overlay;
         setTimeout(() => {
@@ -451,7 +478,7 @@
         if (format === "jpeg") {
           const quality = Number(qualityInput.value) / 100;
           const jpegBlob = await new Promise((resolve, reject) => {
-            canvas.toBlob(
+            exportCanvas().toBlob(
               (b) => (b ? resolve(b) : reject(new Error("JPEG export failed"))),
               "image/jpeg",
               quality
@@ -459,18 +486,19 @@
           });
           downloadBlob(jpegBlob, filename.replace(/\.png$/i, ".jpg"));
         } else if (format === "pdf") {
-          // Slice the full-resolution canvas into A4-portrait-aspect chunks
-          // so each page of the PDF is a 1:1 crop (no re-scaling) of the
-          // stitched capture.
-          const sliceHeight = Math.round(canvas.width * (841.89 / 595.28));
+          // Slice the full-resolution (annotations-baked-in, if any) canvas
+          // into A4-portrait-aspect chunks so each page of the PDF is a 1:1
+          // crop (no re-scaling) of the stitched capture.
+          const pdfSource = exportCanvas();
+          const sliceHeight = Math.round(pdfSource.width * (841.89 / 595.28));
           const pages = [];
-          for (let top = 0; top < canvas.height; top += sliceHeight) {
-            const w = canvas.width;
-            const h = Math.min(sliceHeight, canvas.height - top);
+          for (let top = 0; top < pdfSource.height; top += sliceHeight) {
+            const w = pdfSource.width;
+            const h = Math.min(sliceHeight, pdfSource.height - top);
             const chunk = document.createElement("canvas");
             chunk.width = w;
             chunk.height = h;
-            chunk.getContext("2d").drawImage(canvas, 0, top, w, h, 0, 0, w, h);
+            chunk.getContext("2d").drawImage(pdfSource, 0, top, w, h, 0, 0, w, h);
             const chunkBlob = await new Promise((resolve, reject) => {
               chunk.toBlob(
                 (b) => (b ? resolve(b) : reject(new Error("PDF page export failed"))),
@@ -504,8 +532,12 @@
     copyBtn.addEventListener("click", async () => {
       try {
         // Must run synchronously inside the click handler to count as a user
-        // gesture for the Clipboard API.
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        // gesture for the Clipboard API. Safari accepts a promise as a
+        // ClipboardItem value, so pass exportPngBlob()'s promise straight
+        // through (no await before this call) rather than resolving it
+        // first — awaiting first would push the actual write() call past
+        // the gesture and Safari would reject it.
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": exportPngBlob() })]);
         copyBtn.textContent = "Copied ✓";
         const mine = state.overlay;
         setTimeout(() => {
@@ -537,7 +569,22 @@
     };
     window.addEventListener("keydown", onKeydown, true);
 
-    state.overlay = { host, url, onKeydown };
+    const overlayRecord = { host, url, onKeydown, annotator: null };
+    state.overlay = overlayRecord;
+
+    // Wait until the preview image has actually loaded — createAnnotator
+    // needs img.clientWidth/naturalWidth for its coordinate math, and the
+    // host is already in the DOM (appended just above) so layout is
+    // available once decode resolves. Guarded against a race where the
+    // overlay is closed (or replaced by a newer capture) while this decode
+    // is still pending.
+    await img.decode();
+    if (state.overlay !== overlayRecord) {
+      return;
+    }
+    annotator = createAnnotator({ img, sourceCanvas: canvas, wrapper, shadowRoot: shadow });
+    panel.insertBefore(annotator.toolbar, imageArea);
+    overlayRecord.annotator = annotator;
   }
 
   // Idempotent: a no-op when no overlay is open, so every close path (✕,
@@ -547,7 +594,10 @@
     if (!state.overlay) {
       return;
     }
-    const { host, url, onKeydown } = state.overlay;
+    const { host, url, onKeydown, annotator } = state.overlay;
+    if (annotator) {
+      annotator.destroy();
+    }
     window.removeEventListener("keydown", onKeydown, true);
     URL.revokeObjectURL(url);
     host.remove();

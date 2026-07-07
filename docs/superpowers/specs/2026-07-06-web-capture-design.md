@@ -29,6 +29,7 @@ An Xcode project with two targets:
    - `content.js` — injected on demand via `browser.scripting.executeScript`. Measures page dimensions, performs scrolling, hides/restores fixed and sticky elements and scrollbars, restores original scroll position, stitches frames onto a canvas, runs the drag-to-select region UI, and shows the preview overlay with Download/Copy options.
    - `shared.js` — pure functions (scroll-step computation, filename generation, canvas-height cap) loaded by both scripts and unit-testable in Node.
    - `pdf.js` — dependency-free multi-page PDF builder (A4 pages, JPEG-embedded), Node-tested.
+   - `annotate.js` — markup toolbar and drawing layer for the preview overlay (pen, line, arrow, rectangle, ellipse); pure arrowhead geometry Node-tested.
 
 Note: Safari does not support the `browser.downloads` WebExtension API, so when the user clicks Download in the preview overlay, the save is triggered from the content script via an invisible `<a download>` anchor click on a blob URL — this saves to the Downloads folder with the chosen filename, with no dialog under Safari's default settings.
 
@@ -55,6 +56,17 @@ Clicking the toolbar icon opens a small popup (`popup.html`/`popup.js`) with thr
 - **Select Region**: the content script shows a full-viewport drag-to-select overlay (dimmed crosshair cursor, dashed selection box with a live width × height label, a hint pill with Esc-to-cancel). Releasing the drag sends the selected rectangle back to the background script, which captures the visible tab and crops it to that rectangle at native (device) resolution — the crop math scales the viewport-CSS-px rectangle by the ratio between the captured frame's width and the viewport width, since Safari decides the capture's actual pixel resolution. A drag smaller than 4×4 CSS px is treated as a cancel; Esc at any time cancels.
 
 All three modes feed the same preview overlay and Download/Copy/format-dropdown options — only the canvas that's handed to the overlay differs (a single cropped, single full, or stitched multi-frame canvas).
+
+## Annotation
+
+The preview overlay includes a markup toolbar (a row directly above the image area) for drawing on the captured image before exporting it:
+
+- **Tools**: Pen (freehand), Line, Arrow, Rectangle, Ellipse. Selecting a tool switches the image area from its normal scroll/pan behavior to drawing mode (crosshair cursor); clicking the active tool again deselects it and returns to normal scrolling. No tool is selected by default.
+- **Colors**: six swatches — red `#ff3b30` (default), yellow `#ffcc00`, green `#34c759`, blue `#007aff`, black `#000000`, white `#ffffff`.
+- **Stroke sizes**: three presets — S (2px), M (4px), L (8px), shown as small/medium/large filled dots.
+- **Undo** removes the most recent annotation; **Clear** removes all of them. Both are no-ops when there are no annotations.
+
+Annotations are stored as vectors (points/endpoints, color, stroke width) in the captured image's native pixel coordinates, not screen coordinates, so they stay pixel-accurate regardless of how large or small the preview panel is rendered on screen. They are drawn live on a transparent canvas layered exactly over the preview `<img>`, and — critically — are baked into every export at full resolution: PNG and JPEG downloads, the PDF's paginated slices, and the Copy-to-clipboard PNG all render from a composite of the original capture plus the annotations, not just the on-screen preview. Dismissing the overlay discards all annotations; there is no separate "save annotations" step.
 
 ## Output
 
