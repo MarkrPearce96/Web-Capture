@@ -1091,9 +1091,8 @@ function createAnnotator(options) {
   }
 
   // Double-click re-edit: with the Select tool, on any text annotation; with
-  // any other tool, only on activeText itself (there's no hit-test against
-  // the *other* annotations in that case, matching how those tools don't
-  // otherwise interact with existing shapes at all).
+  // any other tool, search all text annotations topmost-first, mirroring the
+  // Select-tool branch behavior.
   function onDoubleClick(e) {
     var pt = toNatural(e);
     var target = null;
@@ -1102,13 +1101,27 @@ function createAnnotator(options) {
       if (hit && hit.tool === "text") {
         target = hit;
       }
-    } else if (activeText && hitAnnotation(activeText, pt.x, pt.y)) {
-      target = activeText;
+    } else {
+      // Iterate all annotations topmost-first, find the first text annotation
+      // that hits the point. Mirroring the Select-tool branch lets the Text
+      // tool double-click re-edit any text box, not just activeText.
+      for (var i = annotations.length - 1; i >= 0; i--) {
+        var a = annotations[i];
+        if (a.tool === "text" && hitAnnotation(a, pt.x, pt.y)) {
+          target = a;
+          break;
+        }
+      }
     }
     if (!target) {
       return;
     }
     e.preventDefault();
+    // Commit any open editor first (e.g., a phantom from the double-click's
+    // single-click phase) before opening the target's editor.
+    if (textEditorEl) {
+      commitTextEditor();
+    }
     openTextEditorForExisting(target);
   }
 
@@ -1196,8 +1209,8 @@ function createAnnotator(options) {
   // can resync a mid-edit box after a zoom change without rebuilding it.
   function positionTextEditor(el, annotation) {
     var pCss = annotation.fontSize * 0.25 * scale;
-    el.style.left = annotation.x * scale + "px";
-    el.style.top = annotation.y * scale + "px";
+    el.style.left = annotation.x * scale - pCss - 1 + "px";
+    el.style.top = annotation.y * scale - pCss - 1 + "px";
     el.style.fontSize = annotation.fontSize * scale + "px";
     el.style.color = annotation.color;
     el.style.background = annotation.bg || "transparent";
