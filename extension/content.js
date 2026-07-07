@@ -243,10 +243,31 @@
 
   // Builds and shows the in-page preview overlay for a finished capture. The
   // only call site is `finish()`. `canvas` is the full-resolution stitched
-  // capture (kept around for JPEG re-encoding and PDF paging); `blob` is
-  // always the PNG export, used for the preview `<img>` and the Copy button.
-  function showOverlay(canvas, blob, filename) {
+  // capture (kept around for JPEG re-encoding, PDF paging, and as the base
+  // layer for baking in annotations); `blob` is always the PNG export, used
+  // for the preview `<img>` and (when there are no annotations) the Copy
+  // button. Async because it waits for the preview image to finish loading
+  // (needed for the annotator's coordinate math) before wiring up markup
+  // tools; not awaited by its callers (fire-and-forget), matching the rest
+  // of this file's message-handler contracts.
+  async function showOverlay(canvas, blob, filename) {
     const url = URL.createObjectURL(blob);
+    let annotator = null;
+
+    // Returns the canvas to export from: the plain capture when there are no
+    // annotations, or a freshly-composited canvas (capture + annotations
+    // baked in at full resolution) otherwise. Used by every export path
+    // (PNG/JPEG/PDF download and Copy) so annotations always end up in the
+    // saved/copied output.
+    function exportCanvas() {
+      return annotator && annotator.hasAnnotations() ? annotator.renderComposite() : canvas;
+    }
+
+    async function exportPngBlob() {
+      return annotator && annotator.hasAnnotations()
+        ? canvasToBlob(exportCanvas(), "image/png")
+        : blob;
+    }
 
     const host = document.createElement("div");
     host.style.position = "fixed";
@@ -269,8 +290,8 @@
         left: 50%;
         transform: translate(-50%, -50%);
         width: 90vw;
-        max-width: 720px;
-        max-height: 85vh;
+        max-width: 900px;
+        max-height: 88vh;
         background: #fff;
         border-radius: 12px;
         box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
@@ -281,20 +302,14 @@
       .image-area {
         overflow: auto;
         flex: 1;
+        overscroll-behavior: contain;
+      }
+      .image-wrapper {
+        position: relative;
       }
       .image-area img {
         width: 100%;
         display: block;
-      }
-      .options-row {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 18px;
-        padding: 10px 16px;
-        border-top: 1px solid #e2e2e2;
-        font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
-        flex: none;
       }
       .field {
         display: flex;
@@ -305,7 +320,7 @@
         color: #666;
         font-size: 12px;
       }
-      .options-row select {
+      .button-row select {
         font: inherit;
         font-size: 13px;
         padding: 4px 6px;
@@ -324,11 +339,22 @@
       }
       .button-row {
         display: flex;
-        justify-content: flex-end;
-        gap: 8px;
+        align-items: center;
+        gap: 18px;
         padding: 12px 16px;
         border-top: 1px solid #e2e2e2;
         flex: none;
+        flex-wrap: wrap;
+      }
+      .button-row .format-controls {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+      .button-row .button-group {
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
       }
       button {
         font: inherit;
@@ -352,15 +378,22 @@
         right: 12px;
         width: 28px;
         height: 28px;
+        min-width: 28px;
+        min-height: 28px;
         padding: 0;
         border-radius: 50%;
-        background: rgba(0, 0, 0, 0.08);
-        color: #333;
+        border: 1.5px solid rgba(255, 255, 255, 0.9);
+        background: rgba(0, 0, 0, 0.55);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+        color: #fff;
         font-size: 15px;
         line-height: 1;
         display: flex;
         align-items: center;
         justify-content: center;
+      }
+      .close:hover {
+        background: rgba(0, 0, 0, 0.75);
       }
     `;
 
@@ -373,12 +406,12 @@
 
     const imageArea = document.createElement("div");
     imageArea.className = "image-area";
+    const wrapper = document.createElement("div");
+    wrapper.className = "image-wrapper";
     const img = document.createElement("img");
     img.src = url;
-    imageArea.appendChild(img);
-
-    const optionsRow = document.createElement("div");
-    optionsRow.className = "options-row";
+    wrapper.appendChild(img);
+    imageArea.appendChild(wrapper);
 
     const formatField = document.createElement("div");
     formatField.className = "field";
@@ -422,7 +455,9 @@
       qualityGroup.style.display = formatSelect.value === "jpeg" ? "flex" : "none";
     });
 
-    optionsRow.append(formatField, qualityGroup);
+    const formatControls = document.createElement("div");
+    formatControls.className = "format-controls";
+    formatControls.append(formatField, qualityGroup);
 
     const buttonRow = document.createElement("div");
     buttonRow.className = "button-row";
@@ -434,7 +469,7 @@
       const format = formatSelect.value;
 
       if (format === "png") {
-        downloadBlob(blob, filename);
+        downloadBlob(await exportPngBlob(), filename);
         downloadBtn.textContent = "Saved ✓";
         const mine = state.overlay;
         setTimeout(() => {
@@ -451,7 +486,7 @@
         if (format === "jpeg") {
           const quality = Number(qualityInput.value) / 100;
           const jpegBlob = await new Promise((resolve, reject) => {
-            canvas.toBlob(
+            exportCanvas().toBlob(
               (b) => (b ? resolve(b) : reject(new Error("JPEG export failed"))),
               "image/jpeg",
               quality
@@ -459,18 +494,19 @@
           });
           downloadBlob(jpegBlob, filename.replace(/\.png$/i, ".jpg"));
         } else if (format === "pdf") {
-          // Slice the full-resolution canvas into A4-portrait-aspect chunks
-          // so each page of the PDF is a 1:1 crop (no re-scaling) of the
-          // stitched capture.
-          const sliceHeight = Math.round(canvas.width * (841.89 / 595.28));
+          // Slice the full-resolution (annotations-baked-in, if any) canvas
+          // into A4-portrait-aspect chunks so each page of the PDF is a 1:1
+          // crop (no re-scaling) of the stitched capture.
+          const pdfSource = exportCanvas();
+          const sliceHeight = Math.round(pdfSource.width * (841.89 / 595.28));
           const pages = [];
-          for (let top = 0; top < canvas.height; top += sliceHeight) {
-            const w = canvas.width;
-            const h = Math.min(sliceHeight, canvas.height - top);
+          for (let top = 0; top < pdfSource.height; top += sliceHeight) {
+            const w = pdfSource.width;
+            const h = Math.min(sliceHeight, pdfSource.height - top);
             const chunk = document.createElement("canvas");
             chunk.width = w;
             chunk.height = h;
-            chunk.getContext("2d").drawImage(canvas, 0, top, w, h, 0, 0, w, h);
+            chunk.getContext("2d").drawImage(pdfSource, 0, top, w, h, 0, 0, w, h);
             const chunkBlob = await new Promise((resolve, reject) => {
               chunk.toBlob(
                 (b) => (b ? resolve(b) : reject(new Error("PDF page export failed"))),
@@ -504,8 +540,12 @@
     copyBtn.addEventListener("click", async () => {
       try {
         // Must run synchronously inside the click handler to count as a user
-        // gesture for the Clipboard API.
-        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        // gesture for the Clipboard API. Safari accepts a promise as a
+        // ClipboardItem value, so pass exportPngBlob()'s promise straight
+        // through (no await before this call) rather than resolving it
+        // first — awaiting first would push the actual write() call past
+        // the gesture and Safari would reject it.
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": exportPngBlob() })]);
         copyBtn.textContent = "Copied ✓";
         const mine = state.overlay;
         setTimeout(() => {
@@ -525,10 +565,28 @@
     closeBtn.setAttribute("aria-label", "Close");
     closeBtn.addEventListener("click", closeOverlay);
 
-    buttonRow.append(downloadBtn, copyBtn);
-    panel.append(imageArea, optionsRow, buttonRow, closeBtn);
+    const buttonGroup = document.createElement("div");
+    buttonGroup.className = "button-group";
+    buttonGroup.append(downloadBtn, copyBtn);
+
+    buttonRow.append(formatControls, buttonGroup);
+    panel.append(imageArea, buttonRow, closeBtn);
     shadow.append(style, backdrop, panel);
     document.documentElement.appendChild(host);
+
+    // Lock page scroll while the overlay is open — reaching the end of the
+    // preview's own scrollable image area must not chain into scrolling the
+    // page behind it. Saved as plain inline-style strings (not a
+    // before/after diff) so closeOverlay can restore exactly what was there,
+    // including "no inline value at all" (removeProperty).
+    const priorHtmlOverflow = document.documentElement.style.getPropertyValue("overflow");
+    const priorBodyOverflow = document.body
+      ? document.body.style.getPropertyValue("overflow")
+      : null;
+    document.documentElement.style.overflow = "hidden";
+    if (document.body) {
+      document.body.style.overflow = "hidden";
+    }
 
     const onKeydown = (event) => {
       if (event.key === "Escape") {
@@ -537,7 +595,135 @@
     };
     window.addEventListener("keydown", onKeydown, true);
 
-    state.overlay = { host, url, onKeydown };
+    const overlayRecord = {
+      host,
+      url,
+      onKeydown,
+      annotator: null,
+      priorHtmlOverflow,
+      priorBodyOverflow,
+    };
+    state.overlay = overlayRecord;
+
+    // Wait until the preview image has actually loaded — createAnnotator
+    // needs img.clientWidth/naturalWidth for its coordinate math, and the
+    // host is already in the DOM (appended just above) so layout is
+    // available once decode resolves. Guarded against a race where the
+    // overlay is closed (or replaced by a newer capture) while this decode
+    // is still pending.
+    await img.decode();
+    if (state.overlay !== overlayRecord) {
+      return;
+    }
+    annotator = createAnnotator({ img, sourceCanvas: canvas, wrapper, shadowRoot: shadow });
+    panel.insertBefore(annotator.toolbar, buttonRow);
+    overlayRecord.annotator = annotator;
+
+    // Freeze the panel's natural height so zooming (which grows the image
+    // wrapper) can only scroll inside the image area, never reshape the panel.
+    if (state.overlay === overlayRecord) {
+      panel.style.height = Math.ceil(panel.getBoundingClientRect().height) + "px";
+    }
+
+    function onWindowResize() {
+      applyZoomWidth();
+      annotator.refresh();
+    }
+    window.addEventListener("resize", onWindowResize);
+    overlayRecord.onResize = onWindowResize;
+
+    // ---- pinch-to-zoom (trackpad pinch via Safari's non-standard gesture
+    // events, or ctrl+wheel as the emulated equivalent) ----------------
+    // Zoom factor 1 (fit width, current look) to 6, applied to the img's
+    // width (see setZoom below for why wrapper is sized to match
+    // explicitly rather than left to auto-fill imageArea); the annotator's
+    // `inset: 0` layer then follows the wrapper automatically, but its
+    // canvas backing store has to be re-synced (via refresh()) after every
+    // change since it isn't observing layout on its own. These listeners
+    // live entirely on overlay-internal elements (inside `host`), so —
+    // unlike the window keydown listener above — nothing needs to
+    // explicitly remove them at close: they die with the rest of the
+    // subtree when `host.remove()` runs.
+    let zoom = 1;
+
+    function applyZoomWidth() {
+      if (zoom === 1) {
+        img.style.removeProperty("width");
+        wrapper.style.removeProperty("width");
+      } else {
+        var targetWidth = imageArea.clientWidth * zoom;
+        img.style.width = targetWidth + "px";
+        wrapper.style.width = targetWidth + "px";
+      }
+    }
+
+    function setZoom(next, clientX, clientY) {
+      next = Math.min(6, Math.max(1, next));
+      if (Math.abs(next - zoom) < 0.001) {
+        return;
+      }
+      const rect = imageArea.getBoundingClientRect();
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
+      const ratio = next / zoom;
+      const newScrollLeft = (imageArea.scrollLeft + px) * ratio - px;
+      const newScrollTop = (imageArea.scrollTop + py) * ratio - py;
+      zoom = next;
+      // img.style.width is conceptually "(zoom * 100) + '%'" of the fit
+      // width (the base CSS rule stays `width: 100%` for the never-zoomed
+      // case) — expressed here in px, computed from imageArea's own width
+      // (stable, unaffected by the img/wrapper), rather than as a live
+      // percentage of `wrapper`. A percentage of `wrapper` would be
+      // self-referential once `wrapper` is also resized to match: wrapper's
+      // width would feed back into img's resolved width (which feeds back
+      // into wrapper's target width next time), compounding every call.
+      // `wrapper` is sized to match explicitly (not left to auto-fill)
+      // because its normal-flow "auto" width always fills imageArea and
+      // ignores an overflowing child's actual size — only its *height*
+      // auto-grows with in-flow content — so without this, the annotation
+      // layer (annot-layer is `inset: 0` of wrapper) would stay clipped to
+      // the un-zoomed width instead of covering the zoomed image.
+      applyZoomWidth();
+      imageArea.scrollLeft = newScrollLeft;
+      imageArea.scrollTop = newScrollTop;
+      annotator.refresh();
+    }
+
+    let startZoom = 1;
+    imageArea.addEventListener(
+      "gesturestart",
+      (e) => {
+        e.preventDefault();
+        startZoom = zoom;
+      },
+      { passive: false }
+    );
+    imageArea.addEventListener(
+      "gesturechange",
+      (e) => {
+        e.preventDefault();
+        setZoom(startZoom * e.scale, e.clientX, e.clientY);
+      },
+      { passive: false }
+    );
+    imageArea.addEventListener(
+      "gestureend",
+      (e) => {
+        e.preventDefault();
+      },
+      { passive: false }
+    );
+    imageArea.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.ctrlKey) {
+          return;
+        }
+        e.preventDefault();
+        setZoom(zoom * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+      },
+      { passive: false }
+    );
   }
 
   // Idempotent: a no-op when no overlay is open, so every close path (✕,
@@ -547,10 +733,32 @@
     if (!state.overlay) {
       return;
     }
-    const { host, url, onKeydown } = state.overlay;
+    const { host, url, onKeydown, onResize, annotator, priorHtmlOverflow, priorBodyOverflow } =
+      state.overlay;
+    if (annotator) {
+      annotator.destroy();
+    }
     window.removeEventListener("keydown", onKeydown, true);
+    if (onResize) {
+      window.removeEventListener("resize", onResize);
+    }
     URL.revokeObjectURL(url);
     host.remove();
+    if (priorHtmlOverflow) {
+      document.documentElement.style.overflow = priorHtmlOverflow;
+    } else {
+      document.documentElement.style.removeProperty("overflow");
+    }
+    // priorBodyOverflow is null (not just falsy) when there was no
+    // document.body to touch at open time — only restore it if we actually
+    // set it.
+    if (priorBodyOverflow !== null && document.body) {
+      if (priorBodyOverflow) {
+        document.body.style.overflow = priorBodyOverflow;
+      } else {
+        document.body.style.removeProperty("overflow");
+      }
+    }
     state.overlay = null;
   }
 

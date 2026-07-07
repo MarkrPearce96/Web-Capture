@@ -67,7 +67,7 @@ async function injectScripts(tabId) {
   // which lands in the error-badge path in each caller.
   await browser.scripting.executeScript({
     target: { tabId },
-    files: ["shared.js", "pdf.js", "content.js"],
+    files: ["shared.js", "pdf.js", "annotate.js", "content.js"],
   });
 }
 
