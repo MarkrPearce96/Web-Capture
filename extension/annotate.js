@@ -190,7 +190,20 @@ function drawTextAnnotation(ctx, a) {
 
 // ---- Toolbar data -----------------------------------------------------
 
-var ANNOT_COLORS = ["#ff3b30", "#ffcc00", "#34c759", "#007aff", "#000000", "#ffffff"];
+var ANNOT_COLORS = [
+  "#ff3b30", // red (default)
+  "#ff9500", // orange
+  "#ffcc00", // yellow
+  "#34c759", // green
+  "#5ac8fa", // cyan
+  "#007aff", // blue
+  "#af52de", // purple
+  "#ff2d55", // pink
+  "#a2845e", // brown
+  "#8e8e93", // grey
+  "#000000", // black
+  "#ffffff", // white
+];
 
 // cssPx is the stored/display stroke width (natural px = cssPx / scale at
 // creation time, see createAnnotator); dot is the diameter of the swatch's
@@ -393,7 +406,7 @@ function annotStyleText() {
       display: flex;
       flex-direction: column;
       gap: 6px;
-      max-width: 260px;
+      max-width: 300px;
       padding: 6px 8px;
       background: #fff;
       border-radius: 8px;
