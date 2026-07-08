@@ -382,15 +382,20 @@ function annotStyleText() {
     .annot-text-options {
       position: absolute;
       display: flex;
-      align-items: center;
+      flex-direction: column;
       gap: 6px;
-      flex-wrap: wrap;
       max-width: 260px;
       padding: 6px 8px;
       background: #fff;
       border-radius: 8px;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.06);
       z-index: 3;
+    }
+    .annot-text-options-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
     }
     .annot-text-options .annot-swatch {
       width: 14px;
@@ -408,10 +413,37 @@ function annotStyleText() {
       border-top: 1.5px solid #ff3b30;
       transform: rotate(45deg);
     }
-    .annot-text-divider {
-      width: 1px;
-      height: 16px;
-      background: #e2e2e2;
+    .annot-swatch.annot-disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+    .annot-target-group {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .annot-target-btn {
+      border: none;
+      background: transparent;
+      color: #444;
+      font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 3px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      flex: none;
+    }
+    .annot-target-btn:hover {
+      background: #f0f0f0;
+    }
+    .annot-target-btn.annot-active {
+      background: rgba(34, 115, 242, 0.15);
+      color: #2273f2;
+    }
+    .annot-text-size-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
       flex: none;
     }
     .annot-text-size-btn {
@@ -495,6 +527,12 @@ function createAnnotator(options) {
   // The floating per-box style popup element for `activeText`, or null
   // when hidden (no active text, or an edit is in progress).
   var textOptionsEl = null;
+  // Which property the popup's unified color-swatch row currently applies
+  // to: "text" (annotation.color) or "bg" (annotation.bg). Reset to "text"
+  // whenever the popup is freshly opened via showTextOptions (see below);
+  // preserved across in-popup rebuilds (color pick, target toggle, font
+  // size step, resize resync) via refreshTextOptions.
+  var textOptionsTarget = "text";
   // Set on a "text" tool pointerdown that isn't a freshSelection move-drag
   // (see onPointerDown), so the matching pointerup can tell a plain click
   // (open a new editor there) apart from a drag (do nothing — text has no
@@ -732,7 +770,10 @@ function createAnnotator(options) {
     }
     repaint();
     if (activeText && textOptionsEl) {
-      showTextOptions(activeText);
+      // Resync only — a pinch-zoom mid-selection shouldn't silently flip
+      // the popup's active target back to Text, so this goes through
+      // refreshTextOptions (preserves textOptionsTarget), not showTextOptions.
+      refreshTextOptions(activeText);
     }
   }
 
@@ -1302,11 +1343,24 @@ function createAnnotator(options) {
     }
   }
 
+  // Opens (or re-opens) the popup for `annotation`, resetting the active
+  // color-target to Text — the entry point for callers that are showing the
+  // popup fresh for a (possibly different) selection: committing a text
+  // edit (new box or re-edit) and the Select tool's click-to-show path.
+  function showTextOptions(annotation) {
+    textOptionsTarget = "text";
+    refreshTextOptions(annotation);
+  }
+
   // Rebuilds the popup from scratch every time it's (re)shown — the popup
   // is small and this keeps every button's rendered state (selected swatch,
-  // current size) trivially in sync with `annotation` without a separate
-  // update path.
-  function showTextOptions(annotation) {
+  // active target, current size) trivially in sync with `annotation`
+  // without a separate update path. Unlike showTextOptions, this preserves
+  // whatever color-target (Text/Background) is currently active — used for
+  // in-popup interactions (swatch clicks, target toggle, font-size
+  // stepper) and the resize resync, none of which should silently flip the
+  // target back to Text.
+  function refreshTextOptions(annotation) {
     hideTextOptions();
     var el = buildTextOptions(annotation);
     wrapper.appendChild(el);
@@ -1335,36 +1389,73 @@ function createAnnotator(options) {
       e.preventDefault();
     });
 
+    // Row 1: one unified swatch set. Each swatch applies its color to
+    // whichever target (Text / Background) is active in row 2; the ring
+    // marks the active target's CURRENT value, so toggling the target
+    // re-rings without touching the annotation.
+    var colorRow = document.createElement("div");
+    colorRow.className = "annot-text-options-row";
+    var isBg = textOptionsTarget === "bg";
+
     ANNOT_COLORS.forEach(function (color) {
-      el.appendChild(
-        buildTextSwatch("Text color " + color, color, annotation.color === color, function () {
-          annotation.color = color;
+      var selected = isBg ? annotation.bg === color : annotation.color === color;
+      var label = (isBg ? "Background " : "Text color ") + color;
+      colorRow.appendChild(
+        buildTextSwatch(label, color, selected, function () {
+          if (isBg) {
+            annotation.bg = color;
+          } else {
+            annotation.color = color;
+          }
           repaint();
-          showTextOptions(annotation);
+          refreshTextOptions(annotation);
         })
       );
     });
 
-    el.appendChild(buildTextDivider());
-
-    ANNOT_COLORS.forEach(function (color) {
-      el.appendChild(
-        buildTextSwatch("Background " + color, color, annotation.bg === color, function () {
-          annotation.bg = color;
-          repaint();
-          showTextOptions(annotation);
-        })
-      );
-    });
-    var noneSwatch = buildTextSwatch("No background", null, !annotation.bg, function () {
+    // "None" (transparent) only makes sense for the background target;
+    // while Text is active it's visible but inert, so the row never
+    // changes shape as the target toggles.
+    var noneSwatch = buildTextSwatch("No background", null, isBg && !annotation.bg, function () {
+      if (!isBg) {
+        return;
+      }
       annotation.bg = null;
       repaint();
-      showTextOptions(annotation);
+      refreshTextOptions(annotation);
     });
     noneSwatch.classList.add("annot-bg-none");
-    el.appendChild(noneSwatch);
+    if (!isBg) {
+      noneSwatch.classList.add("annot-disabled");
+    }
+    colorRow.appendChild(noneSwatch);
 
-    el.appendChild(buildTextDivider());
+    // Row 2: the target toggle (left) and the font-size stepper (right).
+    var controlsRow = document.createElement("div");
+    controlsRow.className = "annot-text-options-row";
+
+    var targetGroup = document.createElement("div");
+    targetGroup.className = "annot-target-group";
+    [
+      { id: "text", label: "Text" },
+      { id: "bg", label: "Background" },
+    ].forEach(function (target) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "annot-target-btn";
+      if (textOptionsTarget === target.id) {
+        btn.classList.add("annot-active");
+      }
+      btn.textContent = target.label;
+      btn.addEventListener("pointerdown", function (e) {
+        e.preventDefault();
+      });
+      btn.addEventListener("click", function () {
+        textOptionsTarget = target.id;
+        refreshTextOptions(annotation);
+      });
+      targetGroup.appendChild(btn);
+    });
 
     var minusBtn = document.createElement("button");
     minusBtn.type = "button";
@@ -1394,7 +1485,12 @@ function createAnnotator(options) {
       stepFontSize(annotation, 2);
     });
 
-    el.append(minusBtn, sizeValue, plusBtn);
+    var sizeGroup = document.createElement("div");
+    sizeGroup.className = "annot-text-size-group";
+    sizeGroup.append(minusBtn, sizeValue, plusBtn);
+    controlsRow.append(targetGroup, sizeGroup);
+
+    el.append(colorRow, controlsRow);
     return el;
   }
 
@@ -1417,12 +1513,6 @@ function createAnnotator(options) {
     return btn;
   }
 
-  function buildTextDivider() {
-    var d = document.createElement("div");
-    d.className = "annot-text-divider";
-    return d;
-  }
-
   // CSS-px-at-current-zoom step of 2, clamped to an 8-72 CSS px range —
   // stored back as natural px (fontSize) so it stays visually the same size
   // through further zoom changes, same convention as selectedSizeCssPx.
@@ -1431,7 +1521,7 @@ function createAnnotator(options) {
     var nextCssPx = Math.max(8, Math.min(72, currentCssPx + deltaCssPx));
     annotation.fontSize = nextCssPx / scale;
     repaint();
-    showTextOptions(annotation);
+    refreshTextOptions(annotation);
   }
 
   // ---- public API ----
