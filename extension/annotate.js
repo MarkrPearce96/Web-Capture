@@ -859,13 +859,25 @@ function createAnnotator(options) {
     }
   }
 
+  // Picking a colour or thickness also restyles the currently selected stroke
+  // shape (pen/line/arrow/rect/ellipse — the ones with a `width`; text and
+  // highlight carry their own controls and are left alone), so a shape can be
+  // recoloured or made thicker/thinner after it's drawn, not just before.
   function selectColor(color) {
     selectedColor = color;
+    if (freshSelection && freshSelection.width !== undefined) {
+      freshSelection.color = color;
+      repaint();
+    }
     updateToolbarUI();
   }
 
   function selectSize(cssPx) {
     selectedSizeCssPx = cssPx;
+    if (freshSelection && freshSelection.width !== undefined) {
+      freshSelection.width = cssPx / scale;
+      repaint();
+    }
     updateToolbarUI();
   }
 
