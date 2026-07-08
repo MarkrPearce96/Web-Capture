@@ -1109,6 +1109,19 @@ function createAnnotator(options) {
         a.band[k].x += dx;
         a.band[k].y += dy;
       }
+      // Keep the source words in step with the moved bars so a later
+      // click-to-link adjacency test uses the highlight's current position.
+      if (a.words) {
+        for (var m = 0; m < a.words.length; m++) {
+          a.words[m] = {
+            x: a.words[m].x + dx,
+            y: a.words[m].y + dy,
+            w: a.words[m].w,
+            h: a.words[m].h,
+            breakAfter: a.words[m].breakAfter,
+          };
+        }
+      }
       return;
     }
     a.x0 += dx;
@@ -1228,6 +1241,27 @@ function createAnnotator(options) {
     return null;
   }
 
+  // True if (px,py) is within a padded margin of any detected word — i.e. in
+  // "text territory" (an inter-word gap, or a little above/below a line). Used
+  // to suppress the freehand band there, so dragging the highlighter across a
+  // line of text produces only the clean snapped word bars, not a freehand
+  // smear over the gaps and wobble. The freehand fallback then only appears
+  // where there's genuinely no nearby text (over an image or blank space).
+  function nearAnyWord(px, py) {
+    if (!ocrWords) {
+      return false;
+    }
+    for (var i = 0; i < ocrWords.length; i++) {
+      var wd = ocrWords[i];
+      var padX = wd.h * 0.5;
+      var padY = wd.h * 0.7;
+      if (px >= wd.x - padX && px <= wd.x + wd.w + padX && py >= wd.y - padY && py <= wd.y + wd.h + padY) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function wordAlreadyIncluded(words, r) {
     for (var i = 0; i < words.length; i++) {
       var e = words[i];
@@ -1337,13 +1371,94 @@ function createAnnotator(options) {
           inProgress.words.push(word);
           addedWord = true;
         }
-      } else {
+      } else if (!nearAnyWord(sx, sy)) {
+        // Only lay down freehand where there's no nearby text — inter-word
+        // gaps and slight vertical wobble over a highlighted line are covered
+        // by the merged word bars instead.
         inProgress.band.push({ x: sx, y: sy });
       }
     }
     if (addedWord) {
       inProgress.rects = mergeHighlightWords(inProgress.words);
     }
+  }
+
+  // True if two words sit next to each other on the same line with only a
+  // word-gap between them and the left one doesn't close a clause — the same
+  // rule mergeHighlightWords uses within a stroke, but applied across two
+  // separate highlights so a newly-clicked word can link onto an existing bar.
+  function wordsAdjacent(a, b) {
+    if (verticalOverlap(a, b) <= 0.5 * Math.min(a.h, b.h)) {
+      return false;
+    }
+    var left = a.x <= b.x ? a : b;
+    var right = a.x <= b.x ? b : a;
+    if (left.breakAfter) {
+      return false;
+    }
+    var avgH = (a.h + b.h) / 2;
+    var gap = right.x - (left.x + left.w);
+    return gap < 0.6 * avgH && gap > -avgH;
+  }
+
+  function highlightsConnect(wordsA, wordsB) {
+    for (var i = 0; i < wordsA.length; i++) {
+      for (var j = 0; j < wordsB.length; j++) {
+        if (wordsAdjacent(wordsA[i], wordsB[j])) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function dedupeWords(words) {
+    var out = [];
+    for (var i = 0; i < words.length; i++) {
+      if (!wordAlreadyIncluded(out, words[i])) {
+        out.push(words[i]);
+      }
+    }
+    return out;
+  }
+
+  // Before a freshly finished word-highlight is committed, fold in any
+  // existing highlights it now touches (adjacent same-line words with no
+  // punctuation break between), so clicking a word beside an existing bar
+  // links them into one continuous highlight. Removes the absorbed
+  // annotations and returns the combined one (bars recomputed).
+  function absorbAdjacentHighlights(nh) {
+    var connected = [];
+    for (var i = 0; i < annotations.length; i++) {
+      var a = annotations[i];
+      if (a.tool === "highlight" && a.words && a.words.length && highlightsConnect(a.words, nh.words)) {
+        connected.push(a);
+      }
+    }
+    if (!connected.length) {
+      return nh;
+    }
+    var allWords = nh.words.slice();
+    var allBand = (nh.band || []).slice();
+    connected.forEach(function (a) {
+      allWords = allWords.concat(a.words);
+      if (a.band) {
+        allBand = allBand.concat(a.band);
+      }
+    });
+    annotations = annotations.filter(function (a) {
+      return connected.indexOf(a) === -1;
+    });
+    var merged = {
+      tool: "highlight",
+      color: nh.color,
+      words: dedupeWords(allWords),
+      band: allBand,
+      bandWidth: nh.bandWidth,
+      rects: [],
+    };
+    merged.rects = mergeHighlightWords(merged.words);
+    return merged;
   }
 
   // ---- pointer flow ----
@@ -1559,6 +1674,9 @@ function createAnnotator(options) {
     activePointerId = null;
     lastHighlightPt = null;
     if (isNonDegenerate(finished)) {
+      if (finished.tool === "highlight" && finished.words && finished.words.length) {
+        finished = absorbAdjacentHighlights(finished);
+      }
       annotations.push(finished);
       freshSelection = finished;
       updateFreshHoverCursor(pt);
