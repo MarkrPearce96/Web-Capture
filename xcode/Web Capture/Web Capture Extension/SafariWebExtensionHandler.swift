@@ -86,7 +86,11 @@ class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
                         }
                         let wordRange = searchStart..<wordEnd
                         if let box = try? candidate.boundingBox(for: wordRange),
-                           let rect = self.pixelRect(box, width: width, height: height) {
+                           var rect = self.pixelRect(box, width: width, height: height) {
+                            // Include the word text so the extension can merge
+                            // adjacent words into one highlight but break the
+                            // run at sentence punctuation.
+                            rect["text"] = String(string[wordRange])
                             words.append(rect)
                         }
                         searchStart = wordEnd

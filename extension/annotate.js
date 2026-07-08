@@ -1154,7 +1154,16 @@ function createAnnotator(options) {
         // which is sourceCanvas scaled down by ocrScale when downscaling
         // kicked in above (ocrScale stays 1, a no-op divide, otherwise).
         ocrWords = resp.words.map(function (w) {
-          return { x: w.x / ocrScale, y: w.y / ocrScale, w: w.w / ocrScale, h: w.h / ocrScale };
+          var text = w.text || "";
+          return {
+            x: w.x / ocrScale,
+            y: w.y / ocrScale,
+            w: w.w / ocrScale,
+            h: w.h / ocrScale,
+            // A run of highlighted words merges into one bar unless the word
+            // ends a clause/sentence — then the highlight breaks after it.
+            breakAfter: /[.,;:!?]$/.test(text),
+          };
         });
         ocrState = "done";
       } else {
@@ -1219,14 +1228,82 @@ function createAnnotator(options) {
     return null;
   }
 
-  function rectAlreadyIncluded(rects, r) {
-    for (var i = 0; i < rects.length; i++) {
-      var e = rects[i];
+  function wordAlreadyIncluded(words, r) {
+    for (var i = 0; i < words.length; i++) {
+      var e = words[i];
       if (e.x === r.x && e.y === r.y && e.w === r.w && e.h === r.h) {
         return true;
       }
     }
     return false;
+  }
+
+  // Overlap of two boxes' vertical extents, in natural px (negative if they
+  // don't share any rows) — the "are these on the same line?" test.
+  function verticalOverlap(a, b) {
+    return Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  }
+
+  // Turns the set of picked words into highlight bars: words on the same line
+  // that sit next to each other merge into one continuous bar (filling the
+  // inter-word gaps), but the run breaks after any word that ends a clause or
+  // sentence (comma, full stop, etc. — see `breakAfter`). Words separated by a
+  // large gap (an un-highlighted word between them) also start a new bar.
+  function mergeHighlightWords(words) {
+    if (!words.length) {
+      return [];
+    }
+    // Bucket into lines by vertical overlap.
+    var lines = [];
+    words
+      .slice()
+      .sort(function (a, b) {
+        return a.y - b.y;
+      })
+      .forEach(function (w) {
+        for (var i = 0; i < lines.length; i++) {
+          var L = lines[i];
+          if (verticalOverlap(L, w) > 0.5 * Math.min(L.h, w.h)) {
+            L.words.push(w);
+            var bottom = Math.max(L.y + L.h, w.y + w.h);
+            L.y = Math.min(L.y, w.y);
+            L.h = bottom - L.y;
+            return;
+          }
+        }
+        lines.push({ y: w.y, h: w.h, words: [w] });
+      });
+
+    var rects = [];
+    lines.forEach(function (L) {
+      L.words.sort(function (a, b) {
+        return a.x - b.x;
+      });
+      var run = null;
+      var prev = null;
+      L.words.forEach(function (w) {
+        var avgH = prev ? (prev.h + w.h) / 2 : w.h;
+        var gap = prev ? w.x - (prev.x + prev.w) : 0;
+        // Adjacent = a small gap (roughly one space) and the previous word
+        // didn't close a clause/sentence.
+        var adjacent = prev && !prev.breakAfter && gap < 0.6 * avgH && gap > -avgH;
+        if (run && adjacent) {
+          run.x1 = Math.max(run.x1, w.x + w.w);
+          run.y0 = Math.min(run.y0, w.y);
+          run.y1 = Math.max(run.y1, w.y + w.h);
+        } else {
+          if (run) {
+            rects.push({ x: run.x0, y: run.y0, w: run.x1 - run.x0, h: run.y1 - run.y0 });
+          }
+          run = { x0: w.x, y0: w.y, x1: w.x + w.w, y1: w.y + w.h };
+        }
+        prev = w;
+      });
+      if (run) {
+        rects.push({ x: run.x0, y: run.y0, w: run.x1 - run.x0, h: run.y1 - run.y0 });
+      }
+    });
+    return rects;
   }
 
   // Natural-px sampling step for addHighlightSample below — comfortably
@@ -1236,29 +1313,36 @@ function createAnnotator(options) {
 
   // Samples the segment prevPt -> pt (inclusive of pt; a single sample at
   // pt itself when prevPt === pt, i.e. the initial pointerdown) and, for
-  // each sample, either snaps it onto a detected word's box (deduped into
-  // inProgress.rects by exact x/y/w/h match, so re-crossing the same word
-  // doesn't add it twice) or — no word under that sample — appends the raw
-  // point to inProgress.band, the freehand fallback polyline. Called from
-  // both onPointerDown (prevPt = pt) and onPointerMove (prevPt =
-  // lastHighlightPt) so the two share one sampling/dedup implementation.
+  // each sample, either records the detected word under it (deduped into
+  // inProgress.words by exact box match, so re-crossing the same word doesn't
+  // add it twice) or — no word under that sample — appends the raw point to
+  // inProgress.band, the freehand fallback polyline. After collecting words,
+  // rebuilds inProgress.rects by merging same-line adjacent words into
+  // continuous bars (breaking at punctuation). Called from both onPointerDown
+  // (prevPt = pt) and onPointerMove (prevPt = lastHighlightPt) so the two
+  // share one sampling/dedup implementation.
   function addHighlightSample(inProgress, pt, prevPt) {
     var dx = pt.x - prevPt.x;
     var dy = pt.y - prevPt.y;
     var dist = Math.hypot(dx, dy);
     var steps = Math.max(1, Math.ceil(dist / HIGHLIGHT_SAMPLE_STEP));
+    var addedWord = false;
     for (var i = 1; i <= steps; i++) {
       var t = i / steps;
       var sx = prevPt.x + dx * t;
       var sy = prevPt.y + dy * t;
       var word = findWordAt(sx, sy);
       if (word) {
-        if (!rectAlreadyIncluded(inProgress.rects, word)) {
-          inProgress.rects.push({ x: word.x, y: word.y, w: word.w, h: word.h });
+        if (!wordAlreadyIncluded(inProgress.words, word)) {
+          inProgress.words.push(word);
+          addedWord = true;
         }
       } else {
         inProgress.band.push({ x: sx, y: sy });
       }
+    }
+    if (addedWord) {
+      inProgress.rects = mergeHighlightWords(inProgress.words);
     }
   }
 
@@ -1353,7 +1437,7 @@ function createAnnotator(options) {
     if (selectedTool === "highlight") {
       layer.setPointerCapture(e.pointerId);
       activePointerId = e.pointerId;
-      inProgress = { tool: "highlight", color: selectedColor, rects: [], band: [], bandWidth: HIGHLIGHT_BAND_CSS / scale };
+      inProgress = { tool: "highlight", color: selectedColor, words: [], rects: [], band: [], bandWidth: HIGHLIGHT_BAND_CSS / scale };
       lastHighlightPt = pt;
       addHighlightSample(inProgress, pt, pt);
       repaint();
