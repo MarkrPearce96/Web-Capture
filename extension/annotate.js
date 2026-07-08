@@ -78,21 +78,61 @@ var HANDLE_CURSORS = {
 // same way ANNOT_SIZES.cssPx is (see onPointerDown's highlight branch).
 var HIGHLIGHT_ALPHA = 0.4;
 var HIGHLIGHT_BAND_CSS = 16;
-// Vision's word boxes are ~tight to the ink, so a word WITH a descender (a
-// comma tail, a g/y/p) has a taller box reaching below the baseline, while a
-// word WITHOUT one bottoms out at the baseline. So the bar bottom is fitted
-// to the baseline by trimming HIGHLIGHT_DESCENDER_TRIM of the box height off
-// ONLY descender-bearing words; others keep their box bottom. Then every bar
-// is extended HIGHLIGHT_BOTTOM_EXTEND of the text height past the baseline for
-// a small, even overhang. The top is left at the box top (tallest ink);
-// HIGHLIGHT_TOP_TRIM = 0 because trimming it clipped big caps. All tunable.
-// Applied only to the drawn bars — hit-detection keeps the full box.
-var HIGHLIGHT_TOP_TRIM = 0.0;
-var HIGHLIGHT_DESCENDER_TRIM = 0.27;
-var HIGHLIGHT_BOTTOM_EXTEND = 0.12;
+// Fitting a highlight bar to the letters (baseline at the bottom, tallest ink
+// at the top) is complicated by Vision returning boxes of two kinds depending
+// on the text: "tight" boxes bottom at the baseline (only descender-bearing
+// words reach lower), and "padded" boxes bottom at the font descender line for
+// EVERY word. Which kind a capture uses is detected per capture by comparing
+// the heights of descender vs non-descender words (see annotateBaselines):
+// tight boxes make descender words taller than plain ones; padded boxes make
+// them about equal. Each word then gets a baselineY, and every bar on a line
+// shares the topmost baseline so they align. Constants below, all tunable:
+var HIGHLIGHT_TOP_TRIM = 0.0; // fraction of text height trimmed off the top (0 = tallest ink)
+var HIGHLIGHT_BOTTOM_EXTEND = 0.12; // fraction of text height the bar overhangs past the baseline
+var HIGHLIGHT_PADDED_TRIM = 0.24; // padded boxes: trim this fraction off EVERY word to reach the baseline
+var HIGHLIGHT_TIGHT_RATIO = 1.12; // descender/plain height ratio above which boxes are treated as tight
 // Characters with ink below the baseline: lowercase descenders plus comma and
 // semicolon (the usual culprit on a trailing word like "Sustainable,").
 var HIGHLIGHT_DESCENDER_RE = /[gjpqy,;]/;
+
+// Median of a numeric array (0 for empty). Used by annotateBaselines.
+function highlightMedian(nums) {
+  if (!nums.length) {
+    return 0;
+  }
+  var s = nums.slice().sort(function (a, b) {
+    return a - b;
+  });
+  var mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// Annotates each OCR word with `baselineY` (natural px), the bottom of its
+// letters. Detects whether this capture's boxes are tight or padded by
+// comparing descender vs non-descender word heights, then: tight → plain
+// words keep their box bottom, descender words are lifted by the measured
+// extra height; padded → every word is lifted by HIGHLIGHT_PADDED_TRIM.
+function annotateBaselines(words) {
+  var descH = [];
+  var plainH = [];
+  for (var i = 0; i < words.length; i++) {
+    (words[i].hasDescender ? descH : plainH).push(words[i].h);
+  }
+  var hd = highlightMedian(descH);
+  var hn = highlightMedian(plainH);
+  var tight = descH.length > 0 && plainH.length > 0 && hd > hn * HIGHLIGHT_TIGHT_RATIO;
+  // In tight boxes the descender words' extra height IS the descender depth.
+  var tightFrac = tight ? Math.min(0.4, (hd - hn) / hd) : 0;
+  for (var j = 0; j < words.length; j++) {
+    var w = words[j];
+    var bottom = w.y + w.h;
+    if (tight) {
+      w.baselineY = w.hasDescender ? bottom - tightFrac * w.h : bottom;
+    } else {
+      w.baselineY = bottom - HIGHLIGHT_PADDED_TRIM * w.h;
+    }
+  }
+}
 
 // Resize-handle tuning (see handlePoints/handleAt/resizeAnnotation and
 // drawSelectionCue's handle rendering in createAnnotator): HANDLE_CSS is the
@@ -1256,7 +1296,7 @@ function createAnnotator(options) {
             w: a.words[m].w,
             h: a.words[m].h,
             breakAfter: a.words[m].breakAfter,
-            hasDescender: a.words[m].hasDescender,
+            baselineY: a.words[m].baselineY + dy,
           };
         }
       }
@@ -1407,11 +1447,13 @@ function createAnnotator(options) {
             // A run of highlighted words merges into one bar unless the word
             // ends a clause/sentence — then the highlight breaks after it.
             breakAfter: /[.,;:!?]$/.test(text),
-            // Whether the word has ink below the baseline, so the bar bottom
-            // is fitted to the baseline for it (see mergeHighlightWords).
+            // Whether the word has ink below the baseline (used to detect box
+            // tightness and fit the bar bottom; see annotateBaselines).
             hasDescender: HIGHLIGHT_DESCENDER_RE.test(text),
           };
         });
+        // Fill in each word's baselineY once, from the whole scan.
+        annotateBaselines(ocrWords);
         ocrState = "done";
       } else {
         ocrState = "error";
@@ -1542,17 +1584,6 @@ function createAnnotator(options) {
         lines.push({ y: w.y, h: w.h, words: [w] });
       });
 
-    // A word's baseline estimate: its box bottom, but for a word with ink
-    // below the baseline (comma/g/y) lifted up by the descender fraction.
-    // Vision's boxes are inconsistent — sometimes tight to the baseline,
-    // sometimes padded down to the descender line even for plain words — so
-    // this is only reliable for the descender-bearing words, which is why the
-    // whole LINE takes the highest (topmost) estimate below.
-    function estimatedBaseline(w) {
-      var bottom = w.y + w.h;
-      return w.hasDescender ? bottom - HIGHLIGHT_DESCENDER_TRIM * w.h : bottom;
-    }
-
     var rects = [];
     lines.forEach(function (L) {
       L.words.sort(function (a, b) {
@@ -1560,12 +1591,12 @@ function createAnnotator(options) {
       });
 
       // One baseline for the whole visual line: the topmost (min) per-word
-      // estimate. The descender-bearing words anchor it to the true baseline;
-      // plain words whose boxes are padded lower don't drag it down. Every bar
-      // on the line then shares this bottom, so they can't misalign.
+      // baselineY (computed in annotateBaselines). Sharing one baseline across
+      // every bar on the line keeps them aligned regardless of which words
+      // happen to have descenders.
       var lineBaseline = Infinity;
       L.words.forEach(function (w) {
-        lineBaseline = Math.min(lineBaseline, estimatedBaseline(w));
+        lineBaseline = Math.min(lineBaseline, w.baselineY);
       });
 
       // A finished run -> a bar from the tallest ink (top) to the line
@@ -1633,7 +1664,7 @@ function createAnnotator(options) {
         if (!wordAlreadyIncluded(inProgress.words, word)) {
           // Store a copy so clearing its break flag below can't corrupt the
           // shared OCR word list (or another highlight's words).
-          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter, hasDescender: word.hasDescender };
+          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter, baselineY: word.baselineY };
           // A drag that sweeps across adjacent words links them even across a
           // comma or full stop: clear the break flag on the left of each
           // adjacent in-stroke pair. A single click adds one word with no
