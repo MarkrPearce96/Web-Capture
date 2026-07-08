@@ -22,7 +22,30 @@ browser.runtime.onMessage.addListener((message, sender) => {
   if (message.type === "captureRequest") {
     return handleCaptureRequest(message.mode);
   }
+  if (message.type === "ocrRequest") {
+    return handleOcrRequest(message);
+  }
 });
+
+// Relays a Highlighter-tool OCR request (see annotate.js's scanText) to the
+// native app via Safari's native-messaging bridge (see
+// SafariWebExtensionHandler.swift's "ocr" branch, which runs Apple Vision
+// off the main thread and replies with { ok, words, imageWidth,
+// imageHeight }). Any failure to reach the native side (host not installed,
+// crashed, etc.) is normalized into the same { ok: false, error } shape the
+// native side itself returns on decode/recognition failure, so annotate.js
+// only ever has one failure shape to branch on.
+async function handleOcrRequest(message) {
+  try {
+    var resp = await browser.runtime.sendNativeMessage("com.markpearce.WebCapture", {
+      type: "ocr",
+      image: message.image,
+    });
+    return resp;
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+}
 
 async function handleCaptureRequest(mode) {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
