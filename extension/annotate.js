@@ -1542,23 +1542,15 @@ function createAnnotator(options) {
         lines.push({ y: w.y, h: w.h, words: [w] });
       });
 
-    // A word's baseline (bottom of the letters): its box bottom, lifted by the
-    // descender fraction only when the word actually has ink below the
-    // baseline (so a comma/g/y box is fitted up to the baseline, but a
-    // no-descender box — already bottoming at the baseline — is left alone).
-    function wordBaseline(w) {
+    // A word's baseline estimate: its box bottom, but for a word with ink
+    // below the baseline (comma/g/y) lifted up by the descender fraction.
+    // Vision's boxes are inconsistent — sometimes tight to the baseline,
+    // sometimes padded down to the descender line even for plain words — so
+    // this is only reliable for the descender-bearing words, which is why the
+    // whole LINE takes the highest (topmost) estimate below.
+    function estimatedBaseline(w) {
       var bottom = w.y + w.h;
       return w.hasDescender ? bottom - HIGHLIGHT_DESCENDER_TRIM * w.h : bottom;
-    }
-
-    // A finished run -> a drawn bar spanning the tallest ink (top) down to the
-    // letter baseline plus a small even overhang, so descenders poke through
-    // rather than dragging the bar into the next line.
-    function runRect(run) {
-      var textH = run.baseline - run.top;
-      var top = run.top + textH * HIGHLIGHT_TOP_TRIM;
-      var bottom = run.baseline + textH * HIGHLIGHT_BOTTOM_EXTEND;
-      return { x: run.x0, y: top, w: run.x1 - run.x0, h: bottom - top };
     }
 
     var rects = [];
@@ -1566,6 +1558,25 @@ function createAnnotator(options) {
       L.words.sort(function (a, b) {
         return a.x - b.x;
       });
+
+      // One baseline for the whole visual line: the topmost (min) per-word
+      // estimate. The descender-bearing words anchor it to the true baseline;
+      // plain words whose boxes are padded lower don't drag it down. Every bar
+      // on the line then shares this bottom, so they can't misalign.
+      var lineBaseline = Infinity;
+      L.words.forEach(function (w) {
+        lineBaseline = Math.min(lineBaseline, estimatedBaseline(w));
+      });
+
+      // A finished run -> a bar from the tallest ink (top) to the line
+      // baseline plus a small even overhang past it.
+      function runRect(run) {
+        var textH = lineBaseline - run.top;
+        var top = run.top + textH * HIGHLIGHT_TOP_TRIM;
+        var bottom = lineBaseline + textH * HIGHLIGHT_BOTTOM_EXTEND;
+        return { x: run.x0, y: top, w: run.x1 - run.x0, h: bottom - top };
+      }
+
       var run = null;
       var prev = null;
       L.words.forEach(function (w) {
@@ -1574,16 +1585,14 @@ function createAnnotator(options) {
         // Adjacent = a small gap (roughly one space) and the previous word
         // didn't close a clause/sentence.
         var adjacent = prev && !prev.breakAfter && gap < 0.6 * avgH && gap > -avgH;
-        var wb = wordBaseline(w);
         if (run && adjacent) {
           run.x1 = Math.max(run.x1, w.x + w.w);
           run.top = Math.min(run.top, w.y);
-          run.baseline = Math.max(run.baseline, wb);
         } else {
           if (run) {
             rects.push(runRect(run));
           }
-          run = { x0: w.x, x1: w.x + w.w, top: w.y, baseline: wb };
+          run = { x0: w.x, x1: w.x + w.w, top: w.y };
         }
         prev = w;
       });
