@@ -44,6 +44,15 @@ function distancePointToSegment(px, py, x1, y1, x2, y2) {
 // see createAnnotator below for why those two coordinate spaces coincide.
 
 function drawAnnotation(ctx, a) {
+  // Text has no stroke (color/width apply to fill instead) and its own
+  // ctx.save/restore, so it's handled entirely separately, before the
+  // stroke-oriented setup below runs (that setup assumes `a.width` exists,
+  // which text annotations don't have).
+  if (a.tool === "text") {
+    drawTextAnnotation(ctx, a);
+    return;
+  }
+
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.strokeStyle = a.color;
@@ -121,9 +130,80 @@ function drawPenStroke(ctx, points) {
   ctx.stroke();
 }
 
+// The font string text annotations are always measured/drawn with — kept in
+// one place so drawTextAnnotation and textBounds can never drift apart.
+function textFont(a) {
+  return a.fontSize + "px -apple-system, BlinkMacSystemFont, sans-serif";
+}
+
+// Padding-inclusive bounds of a text annotation, in the same natural-px
+// space as its `x,y`: {x0,y0} is the top-left of the background rect (top
+// left of the text minus padding), {x1,y1} the bottom-right. Used by
+// hit-testing, the selection cue, and options-popup positioning — every
+// consumer that needs to know "how much room does this text box take up"
+// without re-measuring itself. Always re-sets ctx.font (save/restored) so
+// callers can pass any canvas 2d context regardless of its current font.
+function textBounds(ctx, a) {
+  ctx.save();
+  ctx.font = textFont(a);
+  var lines = a.text.split("\n");
+  var lineHeight = a.fontSize * 1.3;
+  var maxWidth = 0;
+  for (var i = 0; i < lines.length; i++) {
+    var w = ctx.measureText(lines[i]).width;
+    if (w > maxWidth) {
+      maxWidth = w;
+    }
+  }
+  ctx.restore();
+  var p = a.fontSize * 0.25;
+  return {
+    x0: a.x - p,
+    y0: a.y - p,
+    x1: a.x + maxWidth + p,
+    y1: a.y + lines.length * lineHeight + p,
+  };
+}
+
+// Multi-line text, top-left anchored at (a.x, a.y): an optional filled
+// background (padded box from textBounds) behind left-aligned, top-baseline
+// lines in a.color. save/restore brackets every ctx property this touches
+// (font, textBaseline, fillStyle) so it never leaks into the next
+// drawAnnotation call in the same repaint/renderComposite loop.
+function drawTextAnnotation(ctx, a) {
+  ctx.save();
+  ctx.font = textFont(a);
+  ctx.textBaseline = "top";
+  var bounds = textBounds(ctx, a);
+  if (a.bg) {
+    ctx.fillStyle = a.bg;
+    ctx.fillRect(bounds.x0, bounds.y0, bounds.x1 - bounds.x0, bounds.y1 - bounds.y0);
+  }
+  ctx.fillStyle = a.color;
+  var lines = a.text.split("\n");
+  var lineHeight = a.fontSize * 1.3;
+  for (var i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], a.x, a.y + i * lineHeight);
+  }
+  ctx.restore();
+}
+
 // ---- Toolbar data -----------------------------------------------------
 
-var ANNOT_COLORS = ["#ff3b30", "#ffcc00", "#34c759", "#007aff", "#000000", "#ffffff"];
+var ANNOT_COLORS = [
+  "#ff3b30", // red (default)
+  "#ff9500", // orange
+  "#ffcc00", // yellow
+  "#34c759", // green
+  "#5ac8fa", // cyan
+  "#007aff", // blue
+  "#af52de", // purple
+  "#ff2d55", // pink
+  "#a2845e", // brown
+  "#8e8e93", // grey
+  "#000000", // black
+  "#ffffff", // white
+];
 
 // cssPx is the stored/display stroke width (natural px = cssPx / scale at
 // creation time, see createAnnotator); dot is the diameter of the swatch's
@@ -133,6 +213,15 @@ var ANNOT_SIZES = [
   { cssPx: 4, dot: 6 },
   { cssPx: 8, dot: 9 },
 ];
+
+// Target-toggle glyphs for the text-box options popup. Text colour: a capital
+// "A" over a thick colour bar (the universal text-colour convention).
+// Background colour: an "A" sitting on a filled rounded box (fill-behind-text).
+// Both use currentColor so they pick up the button's active-blue / idle-grey.
+var TEXT_TARGET_ICON =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16 12 5l6 11"/><path d="M8.5 12h7"/><path d="M5 20h14" stroke-width="3"/></svg>';
+var BG_TARGET_ICON =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 16 11 7l4 9" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.7 12.5h4.6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>';
 
 var ANNOT_TOOLS = [
   {
@@ -170,6 +259,12 @@ var ANNOT_TOOLS = [
     label: "Ellipse",
     icon:
       '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10" cy="10" r="6.5"/></svg>',
+  },
+  {
+    id: "text",
+    label: "Text",
+    icon:
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 5h14M12 5v14"/></svg>',
   },
 ];
 
@@ -290,6 +385,109 @@ function annotStyleText() {
     .annot-layer.annot-active.annot-over-fresh {
       cursor: move;
     }
+    .annot-layer.annot-active.annot-tool-text {
+      cursor: text;
+    }
+    .annot-text-editor {
+      position: absolute;
+      box-sizing: border-box;
+      margin: 0;
+      border: 1px dashed #2273f2;
+      outline: none;
+      resize: none;
+      overflow: hidden;
+      white-space: pre;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      line-height: 1.3;
+      z-index: 2;
+    }
+    .annot-text-options {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: 300px;
+      padding: 6px 8px;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.06);
+      z-index: 3;
+    }
+    .annot-text-options-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .annot-text-options .annot-swatch {
+      width: 14px;
+      height: 14px;
+      flex: none;
+    }
+    .annot-swatch.annot-bg-none {
+      background-color: #fff;
+      background-image:
+        linear-gradient(45deg, #c8c8c8 25%, transparent 25%, transparent 75%, #c8c8c8 75%),
+        linear-gradient(45deg, #c8c8c8 25%, transparent 25%, transparent 75%, #c8c8c8 75%);
+      background-size: 8px 8px;
+      background-position: 0 0, 4px 4px;
+    }
+    .annot-target-group {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .annot-target-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      background: transparent;
+      color: #666;
+      padding: 4px 6px;
+      border-radius: 6px;
+      cursor: pointer;
+      flex: none;
+    }
+    .annot-target-btn:hover {
+      background: #f0f0f0;
+    }
+    .annot-target-btn.annot-active {
+      background: rgba(34, 115, 242, 0.15);
+      color: #2273f2;
+    }
+    .annot-text-size-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      flex: none;
+    }
+    .annot-text-size-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: #444;
+      font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+      cursor: pointer;
+      flex: none;
+    }
+    .annot-text-size-btn:hover {
+      background: #f0f0f0;
+    }
+    .annot-text-size-value {
+      min-width: 20px;
+      text-align: center;
+      font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #444;
+      flex: none;
+    }
   `;
 }
 
@@ -326,6 +524,37 @@ function createAnnotator(options) {
   // the next drag starts on it, that drag moves it instead of drawing — see
   // onPointerDown's freshSelection check, ahead of the normal drawing start.
   var freshSelection = null;
+  // The text annotation currently showing its dashed selection cue + the
+  // floating options popup, or null. Persists across pointer releases
+  // (unlike freshSelection/grabbed, which only exist mid-gesture) — see the
+  // "Selecting + options popup" behavior in showTextOptions/hideTextOptions
+  // below. Set on: a text editor committing non-empty text (new or
+  // re-edit), or the Select tool clicking a text annotation without a
+  // meaningful drag. Cleared on: a pointerdown elsewhere on the layer, tool
+  // switch, undo, clearAll, destroy, or a re-edit committing to empty.
+  var activeText = null;
+  // Non-null while the inline `<textarea>` editor (see openTextEditor) is
+  // open: the editor element itself, the annotation object it's editing
+  // (not yet in `annotations` for a brand-new box until commit), and
+  // whether that annotation is new (vs. re-editing an existing one — see
+  // commitTextEditor's empty-text handling, which differs for each case).
+  var textEditorEl = null;
+  var textEditorAnnotation = null;
+  var textEditorIsNew = false;
+  // The floating per-box style popup element for `activeText`, or null
+  // when hidden (no active text, or an edit is in progress).
+  var textOptionsEl = null;
+  // Which property the popup's unified color-swatch row currently applies
+  // to: "text" (annotation.color) or "bg" (annotation.bg). Reset to "text"
+  // whenever the popup is freshly opened via showTextOptions (see below);
+  // preserved across in-popup rebuilds (color pick, target toggle, font
+  // size step, resize resync) via refreshTextOptions.
+  var textOptionsTarget = "text";
+  // Set on a "text" tool pointerdown that isn't a freshSelection move-drag
+  // (see onPointerDown), so the matching pointerup can tell a plain click
+  // (open a new editor there) apart from a drag (do nothing — text has no
+  // drag-to-draw). Natural px, cleared on that pointerup/pointercancel.
+  var textDownPt = null;
   var selectedTool = null;
   var selectedColor = ANNOT_COLORS[0];
   var selectedSizeCssPx = ANNOT_SIZES[1].cssPx; // M, a reasonable middle default
@@ -351,6 +580,7 @@ function createAnnotator(options) {
   layer.addEventListener("pointermove", onPointerMove);
   layer.addEventListener("pointerup", onPointerUp);
   layer.addEventListener("pointercancel", onPointerUp);
+  layer.addEventListener("dblclick", onDoubleClick);
   window.addEventListener("resize", onResize);
 
   updateToolbarUI();
@@ -454,14 +684,37 @@ function createAnnotator(options) {
     });
     layer.classList.toggle("annot-active", !!selectedTool);
     layer.classList.toggle("annot-tool-select", selectedTool === "select");
+    layer.classList.toggle("annot-tool-text", selectedTool === "text");
+  }
+
+  // Applies a tool's non-destructive state: updates selectedTool, toolbar UI,
+  // and layer classes/cursor. Does NOT clear activeText, freshSelection, or
+  // repaint. Used by selectTool and, after committing a text box, to switch
+  // to Select without losing the just-placed box's popup.
+  function applyToolState(toolId) {
+    selectedTool = toolId;
+    updateToolbarUI();
   }
 
   function selectTool(toolId) {
-    selectedTool = toolId;
-    updateToolbarUI();
+    // Commit before switching so a half-typed box isn't silently dropped —
+    // commitTextEditor() itself handles the empty-text-discards case.
+    if (textEditorEl) {
+      commitTextEditor();
+    }
+    applyToolState(toolId);
+    var changed = false;
     if (freshSelection) {
       freshSelection = null;
       updateFreshHoverCursor(null);
+      changed = true;
+    }
+    if (activeText) {
+      activeText = null;
+      hideTextOptions();
+      changed = true;
+    }
+    if (changed) {
       repaint();
     }
   }
@@ -477,22 +730,39 @@ function createAnnotator(options) {
   }
 
   function undo() {
+    // A pending edit commits first — if it's a brand-new box, this makes it
+    // the thing Undo just removed (consistent with Undo always targeting
+    // the most-recently-created annotation); blur already does this in
+    // practice (the Undo button steals focus from the editor before its own
+    // click handler runs), this is just a non-DOM-timing-dependent backstop.
+    if (textEditorEl) {
+      commitTextEditor();
+    }
     if (annotations.length === 0) {
       return;
     }
     annotations.pop();
     freshSelection = null;
     updateFreshHoverCursor(null);
+    if (activeText) {
+      activeText = null;
+      hideTextOptions();
+    }
     repaint();
   }
 
   function clearAll() {
+    if (textEditorEl) {
+      commitTextEditor();
+    }
     if (annotations.length === 0) {
       return;
     }
     annotations = [];
     freshSelection = null;
     updateFreshHoverCursor(null);
+    activeText = null;
+    hideTextOptions();
     repaint();
   }
 
@@ -507,7 +777,21 @@ function createAnnotator(options) {
     scale = img.clientWidth / img.naturalWidth;
     layer.width = Math.max(1, Math.round(img.clientWidth * dpr));
     layer.height = Math.max(1, Math.round(img.clientHeight * dpr));
+    // Both the live editor and the options popup are positioned/sized from
+    // `scale` (see positionTextEditor/showTextOptions), which just changed
+    // above — resync them so a mid-edit pinch-zoom doesn't leave either one
+    // pointing at stale coordinates.
+    if (textEditorEl) {
+      positionTextEditor(textEditorEl, textEditorAnnotation);
+      autoGrowEditor(textEditorEl);
+    }
     repaint();
+    if (activeText && textOptionsEl) {
+      // Resync only — a pinch-zoom mid-selection shouldn't silently flip
+      // the popup's active target back to Text, so this goes through
+      // refreshTextOptions (preserves textOptionsTarget), not showTextOptions.
+      refreshTextOptions(activeText);
+    }
   }
 
   function onResize() {
@@ -533,6 +817,20 @@ function createAnnotator(options) {
     // while a fresh selection's move-drag is in progress.
     if (freshSelection && (!grabbed || grabbed.annotation !== freshSelection)) {
       drawSelectionCue(ctx, freshSelection);
+    }
+    // activeText's cue is skipped while its editor is open (the editor's
+    // own dashed border already frames it — drawing both would double up
+    // and the two wouldn't even line up, since the editor's box grows with
+    // scrollWidth/scrollHeight rather than measured text metrics) and
+    // de-duped against grabbed/freshSelection the same way those two are
+    // de-duped against each other above.
+    if (
+      activeText &&
+      !textEditorEl &&
+      activeText !== freshSelection &&
+      (!grabbed || grabbed.annotation !== activeText)
+    ) {
+      drawSelectionCue(ctx, activeText);
     }
   }
 
@@ -564,6 +862,10 @@ function createAnnotator(options) {
       }
       return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
     }
+    if (a.tool === "text") {
+      var tb = textBounds(ctx, a);
+      return { x: tb.x0, y: tb.y0, w: tb.x1 - tb.x0, h: tb.y1 - tb.y0 };
+    }
     var x = Math.min(a.x0, a.x1);
     var y = Math.min(a.y0, a.y1);
     return { x: x, y: y, w: Math.abs(a.x1 - a.x0), h: Math.abs(a.y1 - a.y0) };
@@ -588,6 +890,13 @@ function createAnnotator(options) {
   // freshSelection branch (see below) can test a single known annotation
   // without scanning the whole `annotations` array.
   function hitAnnotation(a, px, py) {
+    // Text has no stroke width to fold into the tolerance — just the usual
+    // 8 CSS px fudge factor other tools add on top of their stroke.
+    if (a.tool === "text") {
+      var tb = textBounds(ctx, a);
+      var ttol = 8 / scale;
+      return px >= tb.x0 - ttol && px <= tb.x1 + ttol && py >= tb.y0 - ttol && py <= tb.y1 + ttol;
+    }
     var tol = a.width / 2 + 8 / scale;
     if (a.tool === "pen") {
       return hitPen(a, { x: px, y: py }, tol);
@@ -633,6 +942,11 @@ function createAnnotator(options) {
       }
       return;
     }
+    if (a.tool === "text") {
+      a.x += dx;
+      a.y += dy;
+      return;
+    }
     a.x0 += dx;
     a.y0 += dy;
     a.x1 += dx;
@@ -660,6 +974,25 @@ function createAnnotator(options) {
     e.preventDefault();
     var pt = toNatural(e);
 
+    // Any pointerdown on the layer is, by definition, "elsewhere" relative
+    // to whatever the editor/popup were anchored to — commit the one and
+    // drop the other before doing anything tool-specific below. (A hit on
+    // activeText's own bounds is handled as "still here" further down, not
+    // cleared here.)
+    if (textEditorEl) {
+      commitTextEditor();
+    }
+    if (activeText && !hitAnnotation(activeText, pt.x, pt.y)) {
+      activeText = null;
+      hideTextOptions();
+      // Repaint immediately (rather than relying on a branch further down
+      // to do it) — some paths below return without ever repainting
+      // (notably the Text tool's click-tracking branch), which would
+      // otherwise leave activeText's dashed cue stuck on the canvas after
+      // its popup has already disappeared.
+      repaint();
+    }
+
     if (selectedTool === "select") {
       var hit = hitTest(pt);
       if (!hit) {
@@ -669,6 +1002,10 @@ function createAnnotator(options) {
       activePointerId = e.pointerId;
       grabbed = { annotation: hit, lastX: pt.x, lastY: pt.y };
       layer.classList.add("annot-grabbing");
+      // Hide (rather than clear) the popup for the duration of the drag —
+      // it's shown again, repositioned, on release (see onPointerUp).
+      // Harmless no-op if `hit` isn't activeText (nothing is showing).
+      hideTextOptions();
       repaint();
       return;
     }
@@ -676,17 +1013,30 @@ function createAnnotator(options) {
     // A drawing tool is active. If the previous stroke is still "live"
     // (freshSelection) and this drag starts on top of it, move it instead
     // of starting a new drawing — same move-drag machinery as the Select
-    // tool's grab above, just triggered from a drawing tool.
+    // tool's grab above, just triggered from a drawing tool. Applies to the
+    // Text tool too: it's how a just-created text box can be nudged without
+    // switching to Select.
     if (freshSelection && hitAnnotation(freshSelection, pt.x, pt.y)) {
       layer.setPointerCapture(e.pointerId);
       activePointerId = e.pointerId;
       grabbed = { annotation: freshSelection, lastX: pt.x, lastY: pt.y };
       layer.classList.add("annot-grabbing");
+      hideTextOptions();
       repaint();
       return;
     }
     freshSelection = null;
     updateFreshHoverCursor(null);
+
+    if (selectedTool === "text") {
+      // No drag-to-draw for text — remember the down point so pointerup
+      // can tell a click (open an editor there) from a drag (do nothing;
+      // there's nothing sensible to draw from a text-tool drag).
+      layer.setPointerCapture(e.pointerId);
+      activePointerId = e.pointerId;
+      textDownPt = pt;
+      return;
+    }
 
     layer.setPointerCapture(e.pointerId);
     activePointerId = e.pointerId;
@@ -767,7 +1117,29 @@ function createAnnotator(options) {
         freshSelection = null;
         updateFreshHoverCursor(null);
       }
+      // Moving a text box (via Select or a freshSelection nudge) keeps it
+      // (or makes it) the active one — re-show its popup, repositioned to
+      // match wherever the drag left it. Also covers the Select tool's
+      // plain click case (pointerdown-hit immediately followed by
+      // pointerup with no net movement): there's no separate "click vs.
+      // drag" branch for Select, so a click just becomes a zero-distance
+      // move, which lands here the same as a real drag would.
+      if (releasedAnnotation.tool === "text") {
+        activeText = releasedAnnotation;
+        showTextOptions(releasedAnnotation);
+      }
       repaint();
+      return;
+    }
+    if (textDownPt && e.pointerId === activePointerId) {
+      var textDown = textDownPt;
+      textDownPt = null;
+      activePointerId = null;
+      // pointercancel has no reliable "where did this end up" position —
+      // treat it as an abandoned click, not a placement.
+      if (e.type === "pointerup" && Math.hypot(pt.x - textDown.x, pt.y - textDown.y) * scale < 6) {
+        openTextEditorForNew(textDown);
+      }
       return;
     }
     if (!inProgress || e.pointerId !== activePointerId) {
@@ -782,6 +1154,389 @@ function createAnnotator(options) {
       updateFreshHoverCursor(pt);
     }
     repaint();
+  }
+
+  // Double-click re-edit: with the Select tool, on any text annotation; with
+  // any other tool, search all text annotations topmost-first, mirroring the
+  // Select-tool branch behavior.
+  function onDoubleClick(e) {
+    var pt = toNatural(e);
+    var target = null;
+    if (selectedTool === "select") {
+      var hit = hitTest(pt);
+      if (hit && hit.tool === "text") {
+        target = hit;
+      }
+    } else {
+      // Iterate all annotations topmost-first, find the first text annotation
+      // that hits the point. Mirroring the Select-tool branch lets the Text
+      // tool double-click re-edit any text box, not just activeText.
+      for (var i = annotations.length - 1; i >= 0; i--) {
+        var a = annotations[i];
+        if (a.tool === "text" && hitAnnotation(a, pt.x, pt.y)) {
+          target = a;
+          break;
+        }
+      }
+    }
+    if (!target) {
+      return;
+    }
+    e.preventDefault();
+    // Commit any open editor first (e.g., a phantom from the double-click's
+    // single-click phase) before opening the target's editor.
+    if (textEditorEl) {
+      commitTextEditor();
+    }
+    openTextEditorForExisting(target);
+  }
+
+  // ---- Text tool: inline editor + per-box options popup ----
+
+  function isEditingText() {
+    return !!textEditorEl;
+  }
+
+  function openTextEditorForNew(pt) {
+    var annotation = {
+      tool: "text",
+      x: pt.x,
+      y: pt.y,
+      text: "",
+      color: selectedColor,
+      bg: null,
+      fontSize: 16 / scale, // 16 CSS px at the current zoom
+    };
+    openTextEditor(annotation, true);
+  }
+
+  function openTextEditorForExisting(annotation) {
+    if (activeText === annotation) {
+      activeText = null;
+    }
+    hideTextOptions();
+    openTextEditor(annotation, false);
+  }
+
+  function openTextEditor(annotation, isNew) {
+    // Defensive: every caller is expected to have already committed a
+    // previous editor (onPointerDown/selectTool/undo/clearAll all do), but
+    // this is the one choke point that actually creates a new one, so make
+    // it impossible to silently orphan an open editor's DOM node/state
+    // regardless of how a future caller gets here.
+    if (textEditorEl) {
+      commitTextEditor();
+    }
+    hideTextOptions();
+    var el = buildTextEditor(annotation);
+    wrapper.appendChild(el);
+    autoGrowEditor(el);
+    el.focus();
+    if (!isNew) {
+      // Land the cursor at the end rather than selecting everything, so
+      // re-opening to append text doesn't require clearing a selection
+      // first.
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
+    textEditorEl = el;
+    textEditorAnnotation = annotation;
+    textEditorIsNew = isNew;
+    repaint(); // suppresses activeText's canvas cue now that textEditorEl is set
+  }
+
+  function buildTextEditor(annotation) {
+    var el = document.createElement("textarea");
+    el.className = "annot-text-editor";
+    el.value = annotation.text;
+    el.spellcheck = false;
+    positionTextEditor(el, annotation);
+    el.addEventListener("input", function () {
+      autoGrowEditor(el);
+      // Flip the toolbar to Select on the first keystroke (not at commit),
+      // so the moment something is typed the next click selects/moves the
+      // box instead of placing another one. commitTextEditor's own switch
+      // then becomes a no-op backstop.
+      if (selectedTool === "text") {
+        applyToolState("select");
+      }
+    });
+    el.addEventListener("blur", function () {
+      commitTextEditor();
+    });
+    // The overlay's own window-capture Escape handler (content.js) would
+    // otherwise close the whole preview while this editor is open; that's
+    // guarded there via isEditingText(), so it's safe for this handler to
+    // just commit — no need to fight over event order.
+    el.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        commitTextEditor();
+      }
+    });
+    return el;
+  }
+
+  // Sets everything about the editor that depends on `scale` or the
+  // annotation's own styling — split out from buildTextEditor so resizeLayer
+  // can resync a mid-edit box after a zoom change without rebuilding it.
+  function positionTextEditor(el, annotation) {
+    var pCss = annotation.fontSize * 0.25 * scale;
+    el.style.left = annotation.x * scale - pCss - 1 + "px";
+    el.style.top = annotation.y * scale - pCss - 1 + "px";
+    el.style.fontSize = annotation.fontSize * scale + "px";
+    el.style.color = annotation.color;
+    el.style.background = annotation.bg || "transparent";
+    el.style.padding = pCss + "px";
+  }
+
+  function autoGrowEditor(el) {
+    el.style.width = "auto";
+    el.style.height = "auto";
+    el.style.width = el.scrollWidth + "px";
+    el.style.height = el.scrollHeight + "px";
+  }
+
+  // Commit = trim-right; empty text discards (a new box is never added, an
+  // existing one is removed outright — including dropping it from
+  // freshSelection/activeText if it was either). Non-empty text always ends
+  // with the box as activeText and its options popup shown, whether it was
+  // brand new or a re-edit.
+  function commitTextEditor() {
+    if (!textEditorEl) {
+      return;
+    }
+    var editor = textEditorEl;
+    var annotation = textEditorAnnotation;
+    var isNew = textEditorIsNew;
+    textEditorEl = null;
+    textEditorAnnotation = null;
+    textEditorIsNew = false;
+    editor.remove();
+
+    var value = editor.value.trimEnd();
+
+    if (value === "") {
+      if (!isNew) {
+        var idx = annotations.indexOf(annotation);
+        if (idx !== -1) {
+          annotations.splice(idx, 1);
+        }
+      }
+      if (activeText === annotation) {
+        activeText = null;
+        hideTextOptions();
+      }
+      if (freshSelection === annotation) {
+        freshSelection = null;
+        updateFreshHoverCursor(null);
+      }
+      repaint();
+      return;
+    }
+
+    annotation.text = value;
+    if (isNew) {
+      annotations.push(annotation);
+      freshSelection = annotation;
+      updateFreshHoverCursor(null);
+    }
+    activeText = annotation;
+    showTextOptions(annotation);
+    // Auto-switch to Select tool after placing text, preserving the just-placed
+    // box's selection state (activeText, popup, freshSelection remain intact).
+    // Guard: only switch if Text tool is currently active; other paths (e.g.,
+    // Select tool's double-click re-edit) leave the tool unchanged.
+    if (selectedTool === "text") {
+      applyToolState("select");
+    }
+    repaint();
+  }
+
+  function hideTextOptions() {
+    if (textOptionsEl) {
+      textOptionsEl.remove();
+      textOptionsEl = null;
+    }
+  }
+
+  // Opens (or re-opens) the popup for `annotation`, resetting the active
+  // color-target to Text — the entry point for callers that are showing the
+  // popup fresh for a (possibly different) selection: committing a text
+  // edit (new box or re-edit) and the Select tool's click-to-show path.
+  function showTextOptions(annotation) {
+    textOptionsTarget = "text";
+    refreshTextOptions(annotation);
+  }
+
+  // Rebuilds the popup from scratch every time it's (re)shown — the popup
+  // is small and this keeps every button's rendered state (selected swatch,
+  // active target, current size) trivially in sync with `annotation`
+  // without a separate update path. Unlike showTextOptions, this preserves
+  // whatever color-target (Text/Background) is currently active — used for
+  // in-popup interactions (swatch clicks, target toggle, font-size
+  // stepper) and the resize resync, none of which should silently flip the
+  // target back to Text.
+  function refreshTextOptions(annotation) {
+    hideTextOptions();
+    var el = buildTextOptions(annotation);
+    wrapper.appendChild(el);
+    positionTextOptions(annotation, el);
+    textOptionsEl = el;
+  }
+
+  function positionTextOptions(annotation, el) {
+    var bounds = textBounds(ctx, annotation);
+    var popupHeight = el.offsetHeight || 34;
+    var top = annotation.y * scale - popupHeight - 8;
+    if (top < 4) {
+      // No room above — hang it below the box instead.
+      top = bounds.y1 * scale + 8;
+    }
+    el.style.left = annotation.x * scale + "px";
+    el.style.top = Math.max(4, top) + "px";
+  }
+
+  function buildTextOptions(annotation) {
+    var el = document.createElement("div");
+    el.className = "annot-text-options";
+    // Every button below also preventDefaults its own pointerdown, but this
+    // catches any click on the popup's own padding/background too.
+    el.addEventListener("pointerdown", function (e) {
+      e.preventDefault();
+    });
+
+    // Row 1: one unified swatch set. Each swatch applies its color to
+    // whichever target (Text / Background) is active in row 2; the ring
+    // marks the active target's CURRENT value, so toggling the target
+    // re-rings without touching the annotation.
+    var colorRow = document.createElement("div");
+    colorRow.className = "annot-text-options-row";
+    var isBg = textOptionsTarget === "bg";
+
+    ANNOT_COLORS.forEach(function (color) {
+      var selected = isBg ? annotation.bg === color : annotation.color === color;
+      var label = (isBg ? "Background " : "Text color ") + color;
+      colorRow.appendChild(
+        buildTextSwatch(label, color, selected, function () {
+          if (isBg) {
+            annotation.bg = color;
+          } else {
+            annotation.color = color;
+          }
+          repaint();
+          refreshTextOptions(annotation);
+        })
+      );
+    });
+
+    // "None" (transparent) applies only to the background, so it's shown
+    // only while Background is the active target — a checkerboard swatch,
+    // the standard "no fill" indicator.
+    if (isBg) {
+      var noneSwatch = buildTextSwatch("No background", null, !annotation.bg, function () {
+        annotation.bg = null;
+        repaint();
+        refreshTextOptions(annotation);
+      });
+      noneSwatch.classList.add("annot-bg-none");
+      colorRow.appendChild(noneSwatch);
+    }
+
+    // Row 2: the target toggle (left) and the font-size stepper (right).
+    var controlsRow = document.createElement("div");
+    controlsRow.className = "annot-text-options-row";
+
+    var targetGroup = document.createElement("div");
+    targetGroup.className = "annot-target-group";
+    [
+      { id: "text", label: "Text colour", icon: TEXT_TARGET_ICON },
+      { id: "bg", label: "Background colour", icon: BG_TARGET_ICON },
+    ].forEach(function (target) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "annot-target-btn";
+      if (textOptionsTarget === target.id) {
+        btn.classList.add("annot-active");
+      }
+      btn.innerHTML = target.icon;
+      btn.title = target.label;
+      btn.setAttribute("aria-label", target.label);
+      btn.addEventListener("pointerdown", function (e) {
+        e.preventDefault();
+      });
+      btn.addEventListener("click", function () {
+        textOptionsTarget = target.id;
+        refreshTextOptions(annotation);
+      });
+      targetGroup.appendChild(btn);
+    });
+
+    var minusBtn = document.createElement("button");
+    minusBtn.type = "button";
+    minusBtn.className = "annot-text-size-btn";
+    minusBtn.textContent = "−";
+    minusBtn.setAttribute("aria-label", "Decrease font size");
+    minusBtn.addEventListener("pointerdown", function (e) {
+      e.preventDefault();
+    });
+    minusBtn.addEventListener("click", function () {
+      stepFontSize(annotation, -2);
+    });
+
+    var sizeValue = document.createElement("span");
+    sizeValue.className = "annot-text-size-value";
+    sizeValue.textContent = String(Math.round(annotation.fontSize * scale));
+
+    var plusBtn = document.createElement("button");
+    plusBtn.type = "button";
+    plusBtn.className = "annot-text-size-btn";
+    plusBtn.textContent = "+";
+    plusBtn.setAttribute("aria-label", "Increase font size");
+    plusBtn.addEventListener("pointerdown", function (e) {
+      e.preventDefault();
+    });
+    plusBtn.addEventListener("click", function () {
+      stepFontSize(annotation, 2);
+    });
+
+    var sizeGroup = document.createElement("div");
+    sizeGroup.className = "annot-text-size-group";
+    sizeGroup.append(minusBtn, sizeValue, plusBtn);
+    controlsRow.append(targetGroup, sizeGroup);
+
+    el.append(colorRow, controlsRow);
+    return el;
+  }
+
+  function buildTextSwatch(label, color, selected, onClick) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "annot-swatch";
+    if (color) {
+      btn.style.background = color;
+    }
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    if (selected) {
+      btn.classList.add("annot-selected");
+    }
+    btn.addEventListener("pointerdown", function (e) {
+      e.preventDefault();
+    });
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  // CSS-px-at-current-zoom step of 2, clamped to an 8-72 CSS px range —
+  // stored back as natural px (fontSize) so it stays visually the same size
+  // through further zoom changes, same convention as selectedSizeCssPx.
+  function stepFontSize(annotation, deltaCssPx) {
+    var currentCssPx = Math.round(annotation.fontSize * scale);
+    var nextCssPx = Math.max(8, Math.min(72, currentCssPx + deltaCssPx));
+    annotation.fontSize = nextCssPx / scale;
+    repaint();
+    refreshTextOptions(annotation);
   }
 
   // ---- public API ----
@@ -815,6 +1570,14 @@ function createAnnotator(options) {
       return;
     }
     destroyed = true;
+    // The overlay is going away regardless, so just discard any live edit
+    // rather than committing it — there's nowhere for the result to go.
+    if (textEditorEl) {
+      textEditorEl.remove();
+      textEditorEl = null;
+    }
+    hideTextOptions();
+    activeText = null;
     freshSelection = null;
     updateFreshHoverCursor(null);
     window.removeEventListener("resize", onResize);
@@ -827,6 +1590,7 @@ function createAnnotator(options) {
     renderComposite: renderComposite,
     destroy: destroy,
     refresh: resizeLayer,
+    isEditingText: isEditingText,
   };
 }
 
