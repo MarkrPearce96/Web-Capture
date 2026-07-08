@@ -63,7 +63,7 @@ async function handleCaptureRequest(mode) {
     }
   } catch (err) {
     console.error("Web Capture failed:", err);
-    await showErrorBadge(tab.id);
+    await showErrorBadge(tab.id, err);
   } finally {
     inFlightTabs.delete(tab.id);
   }
@@ -79,7 +79,7 @@ async function handleRegionSelected(message, tab) {
     await sendToTab(tab.id, { type: "previewImage", dataUrl, rect: message.rect });
   } catch (err) {
     console.error("Web Capture failed:", err);
-    await showErrorBadge(tab.id);
+    await showErrorBadge(tab.id, err);
   } finally {
     inFlightTabs.delete(tab.id);
   }
@@ -149,11 +149,23 @@ async function sendToTab(tabId, message) {
   return response;
 }
 
-async function showErrorBadge(tabId) {
+const DEFAULT_ACTION_TITLE = "Capture this page";
+
+async function showErrorBadge(tabId, err) {
   try {
-    await browser.action.setBadgeText({ text: "✕", tabId });
+    // Plain ASCII "X" — a multibyte glyph (✕) gets mangled by Safari's badge
+    // renderer into mojibake.
+    await browser.action.setBadgeText({ text: "X", tabId });
+    // Surface the real failure as the toolbar icon's tooltip so it can be
+    // read by hovering; the normal title is restored when the badge clears.
+    if (err !== undefined) {
+      browser.action
+        .setTitle({ tabId, title: "Web Capture error: " + String(err && err.message ? err.message : err) })
+        .catch(() => {});
+    }
     setTimeout(() => {
       browser.action.setBadgeText({ text: "", tabId }).catch(() => {});
+      browser.action.setTitle({ tabId, title: DEFAULT_ACTION_TITLE }).catch(() => {});
     }, BADGE_CLEAR_MS);
   } catch {
     // Badge is best-effort; never let it throw over the real error.
