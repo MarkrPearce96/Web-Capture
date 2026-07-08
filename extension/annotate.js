@@ -1368,7 +1368,22 @@ function createAnnotator(options) {
       var word = findWordAt(sx, sy);
       if (word) {
         if (!wordAlreadyIncluded(inProgress.words, word)) {
-          inProgress.words.push(word);
+          // Store a copy so clearing its break flag below can't corrupt the
+          // shared OCR word list (or another highlight's words).
+          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter };
+          // A drag that sweeps across adjacent words links them even across a
+          // comma or full stop: clear the break flag on the left of each
+          // adjacent in-stroke pair. A single click adds one word with no
+          // in-stroke neighbour, so its break is preserved and the
+          // click-to-link path (wordsAdjacent) still separates at punctuation.
+          for (var wi = 0; wi < inProgress.words.length; wi++) {
+            var ex = inProgress.words[wi];
+            if (sameLineAdjacent(ex, wc)) {
+              var leftWord = ex.x <= wc.x ? ex : wc;
+              leftWord.breakAfter = false;
+            }
+          }
+          inProgress.words.push(wc);
           addedWord = true;
         }
       } else if (!nearAnyWord(sx, sy)) {
@@ -1387,18 +1402,27 @@ function createAnnotator(options) {
   // word-gap between them and the left one doesn't close a clause — the same
   // rule mergeHighlightWords uses within a stroke, but applied across two
   // separate highlights so a newly-clicked word can link onto an existing bar.
-  function wordsAdjacent(a, b) {
+  // Geometry only: same line, roughly a word-gap apart. No punctuation check —
+  // a drag uses this to link words regardless of commas/full stops.
+  function sameLineAdjacent(a, b) {
     if (verticalOverlap(a, b) <= 0.5 * Math.min(a.h, b.h)) {
       return false;
     }
     var left = a.x <= b.x ? a : b;
     var right = a.x <= b.x ? b : a;
-    if (left.breakAfter) {
-      return false;
-    }
     var avgH = (a.h + b.h) / 2;
     var gap = right.x - (left.x + left.w);
     return gap < 0.6 * avgH && gap > -avgH;
+  }
+
+  // Punctuation-aware: adjacent AND the left word doesn't close a clause. Used
+  // by the click-to-link path so separate clicks break at commas/full stops.
+  function wordsAdjacent(a, b) {
+    if (!sameLineAdjacent(a, b)) {
+      return false;
+    }
+    var left = a.x <= b.x ? a : b;
+    return !left.breakAfter;
   }
 
   function highlightsConnect(wordsA, wordsB) {
