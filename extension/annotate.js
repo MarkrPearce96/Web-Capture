@@ -38,6 +38,34 @@ function distancePointToSegment(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - cx, py - cy);
 }
 
+// Which annotation shapes show resize handles when selected (see
+// handlePoints/handleAt/resizeAnnotation and drawSelectionCue's handle
+// rendering, all in createAnnotator below, where `scale` lives) — rect and
+// ellipse get 8 bounding-box handles, line and arrow get 2 endpoint
+// handles. Pen, text, and highlight stay move-only: their shapes don't
+// reduce to editable corners/endpoints the same way.
+function isResizable(a) {
+  return a.tool === "rect" || a.tool === "ellipse" || a.tool === "line" || a.tool === "arrow";
+}
+
+// Cursor shown while hovering a resize handle (see onPointerMove's
+// plain-hover branch), keyed by handle id — the standard diagonal/straight
+// resize cursors for the 8 rect/ellipse box handles, and a move cursor for
+// line/arrow's 2 endpoint handles (dragging either just relocates that end,
+// which reads more like "move" than "resize").
+var HANDLE_CURSORS = {
+  nw: "nwse-resize",
+  se: "nwse-resize",
+  ne: "nesw-resize",
+  sw: "nesw-resize",
+  n: "ns-resize",
+  s: "ns-resize",
+  e: "ew-resize",
+  w: "ew-resize",
+  p0: "move",
+  p1: "move",
+};
+
 // ---- Painting -------------------------------------------------------------
 // Shared by the live drawing layer (repaint, in natural-px-scaled device
 // coordinates) and renderComposite (identity transform, also natural px) —
@@ -50,6 +78,14 @@ function distancePointToSegment(px, py, x1, y1, x2, y2) {
 // same way ANNOT_SIZES.cssPx is (see onPointerDown's highlight branch).
 var HIGHLIGHT_ALPHA = 0.4;
 var HIGHLIGHT_BAND_CSS = 16;
+
+// Resize-handle tuning (see handlePoints/handleAt/resizeAnnotation and
+// drawSelectionCue's handle rendering in createAnnotator): HANDLE_CSS is the
+// handle square's side, in CSS px; HANDLE_HIT_CSS is the extra hit-test
+// margin around a handle, in CSS px, added on top of half the handle's own
+// size so a small square is still easy to grab.
+var HANDLE_CSS = 9;
+var HANDLE_HIT_CSS = 8;
 
 function drawAnnotation(ctx, a) {
   // Text and Highlight annotations have no stroke (their color/width don't
@@ -584,6 +620,13 @@ function createAnnotator(options) {
   // once the pointer is released, so this doubles as "is something being
   // dragged right now".
   var grabbed = null;
+  // Set while a resize handle is being dragged (from pointerdown on a
+  // handle to pointerup/pointercancel): { annotation, handle } — the
+  // annotation being reshaped and the handle id (see handlePoints) it was
+  // grabbed by. Mutually exclusive with `grabbed`: onPointerDown's resize
+  // check runs before both the Select tool's grab and the freshSelection
+  // move-drag, so a handle hit always starts a resize instead of a move.
+  var resizing = null;
   // Set to the just-committed annotation immediately after a drawing tool
   // (pen/line/arrow/rect/ellipse) finishes a stroke (see onPointerUp's
   // drawing-commit branch), and cleared on the next drawing pointerdown,
@@ -796,6 +839,10 @@ function createAnnotator(options) {
     if (toolId === "highlight" && ocrState === "idle") {
       scanText();
     }
+    // A tool switch mid-resize is unlikely given pointer capture (the
+    // toolbar buttons don't fire while the layer holds the pointer), but
+    // null it here too alongside the other mid-gesture state, for safety.
+    resizing = null;
     var changed = false;
     if (freshSelection) {
       freshSelection = null;
@@ -978,6 +1025,23 @@ function createAnnotator(options) {
     ctx.lineWidth = 1 / scale;
     ctx.strokeStyle = "#2273f2";
     ctx.strokeRect(box.x, box.y, box.w, box.h);
+    // Resize handles: small solid squares (no dash) at each of
+    // handlePoints(a)'s natural-px points, drawn on top of the dashed box.
+    if (isResizable(a)) {
+      ctx.setLineDash([]);
+      var side = HANDLE_CSS / scale;
+      var half = side / 2;
+      var points = handlePoints(a);
+      for (var i = 0; i < points.length; i++) {
+        var hx = points[i].x - half;
+        var hy = points[i].y - half;
+        ctx.fillStyle = "#fff";
+        ctx.strokeStyle = "#2273f2";
+        ctx.lineWidth = 1 / scale;
+        ctx.fillRect(hx, hy, side, side);
+        ctx.strokeRect(hx, hy, side, side);
+      }
+    }
     ctx.restore();
   }
 
@@ -1171,6 +1235,99 @@ function createAnnotator(options) {
     a.y0 += dy;
     a.x1 += dx;
     a.y1 += dy;
+  }
+
+  // ---- Select tool: resize handles ----
+
+  // The natural-px points a resizable annotation's handles sit on, each
+  // `{ id, x, y }`. Callers assume `isResizable(a)` is already true — see
+  // handleAt and drawSelectionCue, both of which check it first.
+  // rect/ellipse: 8 handles around the normalized bounding box.
+  // line/arrow: 2 handles, one per endpoint.
+  function handlePoints(a) {
+    if (a.tool === "line" || a.tool === "arrow") {
+      return [
+        { id: "p0", x: a.x0, y: a.y0 },
+        { id: "p1", x: a.x1, y: a.y1 },
+      ];
+    }
+    var left = Math.min(a.x0, a.x1);
+    var right = Math.max(a.x0, a.x1);
+    var top = Math.min(a.y0, a.y1);
+    var bottom = Math.max(a.y0, a.y1);
+    var midX = (left + right) / 2;
+    var midY = (top + bottom) / 2;
+    return [
+      { id: "nw", x: left, y: top },
+      { id: "n", x: midX, y: top },
+      { id: "ne", x: right, y: top },
+      { id: "e", x: right, y: midY },
+      { id: "se", x: right, y: bottom },
+      { id: "s", x: midX, y: bottom },
+      { id: "sw", x: left, y: bottom },
+      { id: "w", x: left, y: midY },
+    ];
+  }
+
+  // The id of the handle at natural-px (px,py), or null if `a` isn't
+  // resizable or no handle is close enough. Hit radius is half the handle's
+  // own rendered size plus the usual generous fudge factor (HANDLE_HIT_CSS),
+  // both converted from CSS to natural px by `scale` — same tolerance
+  // convention as hitAnnotation's per-tool checks.
+  function handleAt(a, px, py) {
+    if (!isResizable(a)) {
+      return null;
+    }
+    var hitRadius = (HANDLE_HIT_CSS + HANDLE_CSS / 2) / scale;
+    var points = handlePoints(a);
+    for (var i = 0; i < points.length; i++) {
+      var h = points[i];
+      if (Math.abs(px - h.x) <= hitRadius && Math.abs(py - h.y) <= hitRadius) {
+        return h.id;
+      }
+    }
+    return null;
+  }
+
+  // Mutates `a` in place to reshape it so the dragged `handle` now sits at
+  // natural-px (px,py). line/arrow: the dragged endpoint simply becomes
+  // (px,py). rect/ellipse: derive the current edges, move whichever edge(s)
+  // the handle owns (a handle id containing 'w'/'e'/'n'/'s' moves the
+  // left/right/top/bottom edge respectively), then store back normalized
+  // (x0<=x1, y0<=y1) — dragging a handle past the opposite edge just flips
+  // which corner is which, which is fine since rect/ellipse are always
+  // drawn from the normalized box.
+  function resizeAnnotation(a, handle, px, py) {
+    if (a.tool === "line" || a.tool === "arrow") {
+      if (handle === "p0") {
+        a.x0 = px;
+        a.y0 = py;
+      } else {
+        a.x1 = px;
+        a.y1 = py;
+      }
+      return;
+    }
+    var left = Math.min(a.x0, a.x1);
+    var right = Math.max(a.x0, a.x1);
+    var top = Math.min(a.y0, a.y1);
+    var bottom = Math.max(a.y0, a.y1);
+    if (handle.indexOf("w") !== -1) {
+      left = px;
+    }
+    if (handle.indexOf("e") !== -1) {
+      right = px;
+    }
+    if (handle.indexOf("n") !== -1) {
+      top = py;
+    }
+    if (handle.indexOf("s") !== -1) {
+      bottom = py;
+    }
+    a.x0 = Math.min(left, right);
+    a.x1 = Math.max(left, right);
+    a.y0 = Math.min(top, bottom);
+    a.y1 = Math.max(top, bottom);
   }
 
   // ---- Highlighter tool: OCR scan + word-snap/freehand sampling ----
@@ -1571,11 +1728,37 @@ function createAnnotator(options) {
       repaint();
     }
 
+    // If freshSelection is showing resize handles (see drawSelectionCue)
+    // and this pointerdown lands on one, start a resize instead of anything
+    // else below — ahead of both the Select tool's grab and the
+    // freshSelection move-drag, so a handle always wins over a body-drag.
+    if (freshSelection && isResizable(freshSelection)) {
+      var handleId = handleAt(freshSelection, pt.x, pt.y);
+      if (handleId) {
+        layer.setPointerCapture(e.pointerId);
+        activePointerId = e.pointerId;
+        resizing = { annotation: freshSelection, handle: handleId };
+        hideTextOptions();
+        repaint();
+        return;
+      }
+    }
+
     if (selectedTool === "select") {
       var hit = hitTest(pt);
       if (!hit) {
+        // Clicking empty space deselects whatever was showing handles/cue.
+        if (freshSelection) {
+          freshSelection = null;
+          updateFreshHoverCursor(null);
+          repaint();
+        }
         return;
       }
+      // Make the hit annotation the fresh selection so it shows resize
+      // handles (if resizable) and stays selected after this drag releases,
+      // same as a freshly drawn shape — not just a transient grab.
+      freshSelection = hit;
       layer.setPointerCapture(e.pointerId);
       activePointerId = e.pointerId;
       grabbed = { annotation: hit, lastX: pt.x, lastY: pt.y };
@@ -1646,6 +1829,12 @@ function createAnnotator(options) {
   }
 
   function onPointerMove(e) {
+    if (resizing && e.pointerId === activePointerId) {
+      var rpt = toNatural(e);
+      resizeAnnotation(resizing.annotation, resizing.handle, rpt.x, rpt.y);
+      repaint();
+      return;
+    }
     if (grabbed && e.pointerId === activePointerId) {
       var gpt = toNatural(e);
       translateAnnotation(grabbed.annotation, gpt.x - grabbed.lastX, gpt.y - grabbed.lastY);
@@ -1655,8 +1844,18 @@ function createAnnotator(options) {
       return;
     }
     if (!inProgress) {
-      // Plain hover: update fresh-selection cursor
+      // Plain hover: show a resize cursor over one of freshSelection's
+      // handles, else clear any inline cursor so the class-based cursor
+      // (crosshair/move/default — see annotStyleText's .annot-layer rules)
+      // applies instead, then update the fresh-selection move-hover cursor
+      // as before.
       var pt = toNatural(e);
+      var hoverHandle = freshSelection && isResizable(freshSelection) ? handleAt(freshSelection, pt.x, pt.y) : null;
+      if (hoverHandle) {
+        layer.style.cursor = HANDLE_CURSORS[hoverHandle];
+      } else {
+        layer.style.removeProperty("cursor");
+      }
       updateFreshHoverCursor(pt);
       return;
     }
@@ -1691,6 +1890,14 @@ function createAnnotator(options) {
 
   function onPointerUp(e) {
     var pt = toNatural(e);
+    if (resizing && e.pointerId === activePointerId) {
+      resizing = null;
+      activePointerId = null;
+      layer.style.removeProperty("cursor");
+      updateFreshHoverCursor(pt);
+      repaint();
+      return;
+    }
     if (grabbed && e.pointerId === activePointerId) {
       // The move is final on release — no undo entry is created for it.
       // Undo (see undo() above) only ever pops the most recently CREATED
@@ -2180,6 +2387,7 @@ function createAnnotator(options) {
     hideScanPill();
     activeText = null;
     freshSelection = null;
+    resizing = null;
     updateFreshHoverCursor(null);
     window.removeEventListener("resize", onResize);
     layer.remove();
