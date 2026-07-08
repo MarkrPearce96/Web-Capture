@@ -78,19 +78,17 @@ var HANDLE_CURSORS = {
 // same way ANNOT_SIZES.cssPx is (see onPointerDown's highlight branch).
 var HIGHLIGHT_ALPHA = 0.4;
 var HIGHLIGHT_BAND_CSS = 16;
-// Vision's word boxes run from the tallest ink down to the lowest descender
-// (a comma's tail, a g/y/p), so a bar spills below the letters toward the
-// next line. The rendered bars are fitted from the tallest letter (top) to
-// the letter BASELINE (bottom), excluding descenders: HIGHLIGHT_TOP_TRIM
-// clears a little leading above the caps; HIGHLIGHT_DESCENDER_TRIM is the
-// fraction of a descender-bearing word's box height taken to be below the
-// baseline. Applied only to the drawn bars — hit-detection keeps the full
-// box so highlighting stays easy to trigger.
-var HIGHLIGHT_TOP_TRIM = 0.05;
-var HIGHLIGHT_DESCENDER_TRIM = 0.15;
-// Characters that dip below the baseline: lowercase descenders plus comma and
-// semicolon (the usual culprit on a trailing word like "Sustainable,").
-var HIGHLIGHT_DESCENDER_RE = /[gjpqy,;]/;
+// Vision returns font-METRIC word boxes: they always span the font's full
+// ascender-to-descender height, so the box bottom is the descender line (not
+// the letter baseline) whether or not the word actually has a descender, and
+// the box top is at/above the tallest ink. So the rendered bar bottom is
+// lifted to the baseline by trimming a fixed fraction of the box height off
+// the bottom of EVERY word (HIGHLIGHT_DESCENDER_TRIM), and the top is left at
+// the box top (HIGHLIGHT_TOP_TRIM = 0 — trimming it cut into big caps).
+// Applied only to the drawn bars — hit-detection keeps the full box so
+// highlighting stays easy to trigger. Both are tunable.
+var HIGHLIGHT_TOP_TRIM = 0.0;
+var HIGHLIGHT_DESCENDER_TRIM = 0.27;
 
 // Resize-handle tuning (see handlePoints/handleAt/resizeAnnotation and
 // drawSelectionCue's handle rendering in createAnnotator): HANDLE_CSS is the
@@ -1254,7 +1252,6 @@ function createAnnotator(options) {
             w: a.words[m].w,
             h: a.words[m].h,
             breakAfter: a.words[m].breakAfter,
-            hasDescender: a.words[m].hasDescender,
           };
         }
       }
@@ -1405,9 +1402,6 @@ function createAnnotator(options) {
             // A run of highlighted words merges into one bar unless the word
             // ends a clause/sentence — then the highlight breaks after it.
             breakAfter: /[.,;:!?]$/.test(text),
-            // Whether the word has ink below the baseline, so the bar bottom
-            // can be lifted to the baseline for it (see mergeHighlightWords).
-            hasDescender: HIGHLIGHT_DESCENDER_RE.test(text),
           };
         });
         ocrState = "done";
@@ -1540,15 +1534,11 @@ function createAnnotator(options) {
         lines.push({ y: w.y, h: w.h, words: [w] });
       });
 
-    // A word's baseline (bottom of the letters): the box bottom for a word
-    // with no descender, or that minus the descender allowance for one that
-    // has ink below the baseline (a comma tail, a g/y). For a run of several
-    // words the true baseline comes from the non-descender words (their box
-    // bottom IS the baseline); a lone descender-bearing word falls back to the
-    // estimate.
+    // A word's baseline (bottom of the letters) = its box bottom lifted by the
+    // fixed descender fraction, since Vision's box always includes the font's
+    // descender space below the baseline regardless of the glyphs.
     function wordBaseline(w) {
-      var bottom = w.y + w.h;
-      return w.hasDescender ? bottom - HIGHLIGHT_DESCENDER_TRIM * w.h : bottom;
+      return w.y + w.h - HIGHLIGHT_DESCENDER_TRIM * w.h;
     }
 
     // A finished run -> a drawn bar spanning the tallest ink (top, minus a
@@ -1623,7 +1613,7 @@ function createAnnotator(options) {
         if (!wordAlreadyIncluded(inProgress.words, word)) {
           // Store a copy so clearing its break flag below can't corrupt the
           // shared OCR word list (or another highlight's words).
-          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter, hasDescender: word.hasDescender };
+          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter };
           // A drag that sweeps across adjacent words links them even across a
           // comma or full stop: clear the break flag on the left of each
           // adjacent in-stroke pair. A single click adds one word with no
