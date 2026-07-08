@@ -45,7 +45,7 @@ function distancePointToSegment(px, py, x1, y1, x2, y2) {
 
 // Highlighter tuning: HIGHLIGHT_ALPHA is the fill/stroke opacity for both
 // word-snapped rects and the freehand fallback band (see
-// drawHighlightAnnotation); HIGHLIGHT_BAND_CSS is the freehand band's
+// drawHighlightOpaque); HIGHLIGHT_BAND_CSS is the freehand band's
 // default CSS-px thickness at creation time, converted to natural px the
 // same way ANNOT_SIZES.cssPx is (see onPointerDown's highlight branch).
 var HIGHLIGHT_ALPHA = 0.4;
@@ -62,10 +62,9 @@ function drawAnnotation(ctx, a) {
     return;
   }
 
-  if (a.tool === "highlight") {
-    drawHighlightAnnotation(ctx, a);
-    return;
-  }
+  // Highlights are NOT drawn here — repaint/renderComposite paint them as one
+  // uniform-opacity group (see drawHighlightGroup) so overlapping highlights
+  // never stack alpha into a darker patch.
 
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -151,9 +150,11 @@ function drawPenStroke(ctx, points) {
 // globalAlpha without visibly compounding at their border. The rects are
 // unioned into a single fill path rather than filled one at a time so two
 // overlapping/adjacent word boxes don't double up their alpha either.
-function drawHighlightAnnotation(ctx, a) {
+// Paints one highlight at FULL opacity. Callers composite the whole highlight
+// group at HIGHLIGHT_ALPHA once (see drawHighlightGroup), so overlaps within
+// the group don't compound into a darker colour.
+function drawHighlightOpaque(ctx, a) {
   ctx.save();
-  ctx.globalAlpha = HIGHLIGHT_ALPHA;
   ctx.fillStyle = a.color;
   ctx.beginPath();
   for (var i = 0; i < a.rects.length; i++) {
@@ -437,7 +438,8 @@ function annotStyleText() {
     .annot-layer.annot-active.annot-over-fresh {
       cursor: move;
     }
-    .annot-layer.annot-active.annot-tool-text {
+    .annot-layer.annot-active.annot-tool-text,
+    .annot-layer.annot-active.annot-tool-highlight {
       cursor: text;
     }
     .annot-text-editor {
@@ -768,6 +770,7 @@ function createAnnotator(options) {
     layer.classList.toggle("annot-active", !!selectedTool);
     layer.classList.toggle("annot-tool-select", selectedTool === "select");
     layer.classList.toggle("annot-tool-text", selectedTool === "text");
+    layer.classList.toggle("annot-tool-highlight", selectedTool === "highlight");
   }
 
   // Applies a tool's non-destructive state: updates selectedTool, toolbar UI,
@@ -888,15 +891,55 @@ function createAnnotator(options) {
     resizeLayer();
   }
 
+  // Paints every highlight (committed, plus an in-progress one) as a single
+  // uniform-opacity group: each is drawn at full opacity into an offscreen
+  // buffer, then the buffer is composited once at HIGHLIGHT_ALPHA. Because the
+  // buffer is opaque wherever any highlight covers, overlapping highlights
+  // never stack alpha — re-highlighting an area keeps one flat colour. Drawn
+  // beneath the other annotations, like a real highlighter under ink.
+  // `unitScale` maps natural px to the target's device px (dpr*scale for the
+  // live layer, 1 for an export canvas whose pixels already are natural px).
+  function drawHighlightGroup(targetCtx, pxW, pxH, unitScale, extra) {
+    var group = [];
+    for (var i = 0; i < annotations.length; i++) {
+      if (annotations[i].tool === "highlight") {
+        group.push(annotations[i]);
+      }
+    }
+    if (extra && extra.tool === "highlight") {
+      group.push(extra);
+    }
+    if (!group.length) {
+      return;
+    }
+    var buf = document.createElement("canvas");
+    buf.width = pxW;
+    buf.height = pxH;
+    var bctx = buf.getContext("2d");
+    bctx.setTransform(unitScale, 0, 0, unitScale, 0, 0);
+    for (var g = 0; g < group.length; g++) {
+      drawHighlightOpaque(bctx, group[g]);
+    }
+    targetCtx.save();
+    targetCtx.setTransform(1, 0, 0, 1, 0, 0);
+    targetCtx.globalAlpha = HIGHLIGHT_ALPHA;
+    targetCtx.drawImage(buf, 0, 0);
+    targetCtx.restore();
+  }
+
   function repaint() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, layer.width, layer.height);
     var dpr = window.devicePixelRatio || 1;
-    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    var unit = dpr * scale;
+    drawHighlightGroup(ctx, layer.width, layer.height, unit, inProgress);
+    ctx.setTransform(unit, 0, 0, unit, 0, 0);
     for (var i = 0; i < annotations.length; i++) {
-      drawAnnotation(ctx, annotations[i]);
+      if (annotations[i].tool !== "highlight") {
+        drawAnnotation(ctx, annotations[i]);
+      }
     }
-    if (inProgress) {
+    if (inProgress && inProgress.tool !== "highlight") {
       drawAnnotation(ctx, inProgress);
     }
     if (grabbed) {
@@ -966,7 +1009,7 @@ function createAnnotator(options) {
 
   // Union bbox of every rect and band point, band points padded by
   // bandWidth/2 (a band point's actual painted extent, since the stroke is
-  // centered on the polyline — see drawHighlightAnnotation). Guaranteed at
+  // centered on the polyline — see drawHighlightOpaque). Guaranteed at
   // least one of rects/band is non-empty by isNonDegenerate, so `minX` etc.
   // are always set by the time either loop below would need them — but the
   // undefined check is kept anyway as a defensive fallback.
@@ -2111,8 +2154,14 @@ function createAnnotator(options) {
     composite.height = sourceCanvas.height;
     var cctx = composite.getContext("2d");
     cctx.drawImage(sourceCanvas, 0, 0);
+    // Highlights as one uniform-opacity group (unitScale 1: export canvas
+    // pixels already are natural px), beneath the other annotations.
+    drawHighlightGroup(cctx, composite.width, composite.height, 1, null);
+    cctx.setTransform(1, 0, 0, 1, 0, 0);
     for (var i = 0; i < annotations.length; i++) {
-      drawAnnotation(cctx, annotations[i]);
+      if (annotations[i].tool !== "highlight") {
+        drawAnnotation(cctx, annotations[i]);
+      }
     }
     return composite;
   }
