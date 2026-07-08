@@ -1701,13 +1701,12 @@ function createAnnotator(options) {
       grabbed = null;
       activePointerId = null;
       layer.classList.remove("annot-grabbing");
-      // Releasing a move-drag on the live fresh selection ends its "live"
-      // state — whether the grab came from the freshSelection path above or
-      // the Select tool happening to grab the same object.
-      if (releasedAnnotation === freshSelection) {
-        freshSelection = null;
-        updateFreshHoverCursor(null);
-      }
+      // A freshly drawn annotation STAYS selected after a move so it can be
+      // repositioned again and again; it only deselects when the next
+      // pointerdown lands off it (onPointerDown clears freshSelection there
+      // and starts a new shape with the still-active drawing tool). Keep the
+      // move cursor showing since the pointer is still over it.
+      updateFreshHoverCursor(pt);
       // Moving a text box (via Select or a freshSelection nudge) keeps it
       // (or makes it) the active one — re-show its popup, repositioned to
       // match wherever the drag left it. Also covers the Select tool's
