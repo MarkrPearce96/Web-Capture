@@ -108,30 +108,41 @@ function highlightMedian(nums) {
 }
 
 // Annotates each OCR word with `baselineY` (natural px), the bottom of its
-// letters. Detects whether this capture's boxes are tight or padded by
-// comparing descender vs non-descender word heights, then: tight → plain
-// words keep their box bottom, descender words are lifted by the measured
-// extra height; padded → every word is lifted by HIGHLIGHT_PADDED_TRIM.
+// letters. Box tightness varies with text SIZE (a big heading can be tight
+// while body text is padded), so words are bucketed by height (~1.5x steps)
+// and each size is classified on its own by comparing descender vs
+// non-descender word heights: tight → plain words keep their box bottom,
+// descender words are lifted by the measured extra height; padded → every
+// word is lifted by HIGHLIGHT_PADDED_TRIM. A size with only one kind of word
+// falls back to padded (the common body-text case).
 function annotateBaselines(words) {
-  var descH = [];
-  var plainH = [];
+  var buckets = {};
   for (var i = 0; i < words.length; i++) {
-    (words[i].hasDescender ? descH : plainH).push(words[i].h);
+    var w = words[i];
+    var key = w.h > 0 ? Math.round(Math.log(w.h) / Math.log(1.5)) : 0;
+    (buckets[key] || (buckets[key] = [])).push(w);
   }
-  var hd = highlightMedian(descH);
-  var hn = highlightMedian(plainH);
-  var tight = descH.length > 0 && plainH.length > 0 && hd > hn * HIGHLIGHT_TIGHT_RATIO;
-  // In tight boxes the descender words' extra height IS the descender depth.
-  var tightFrac = tight ? Math.min(0.4, (hd - hn) / hd) : 0;
-  for (var j = 0; j < words.length; j++) {
-    var w = words[j];
-    var bottom = w.y + w.h;
-    if (tight) {
-      w.baselineY = w.hasDescender ? bottom - tightFrac * w.h : bottom;
-    } else {
-      w.baselineY = bottom - HIGHLIGHT_PADDED_TRIM * w.h;
-    }
-  }
+  Object.keys(buckets).forEach(function (key) {
+    var group = buckets[key];
+    var descH = [];
+    var plainH = [];
+    group.forEach(function (g) {
+      (g.hasDescender ? descH : plainH).push(g.h);
+    });
+    var hd = highlightMedian(descH);
+    var hn = highlightMedian(plainH);
+    var tight = descH.length > 0 && plainH.length > 0 && hd > hn * HIGHLIGHT_TIGHT_RATIO;
+    // In tight boxes the descender words' extra height IS the descender depth.
+    var tightFrac = tight ? Math.min(0.4, (hd - hn) / hd) : 0;
+    group.forEach(function (g) {
+      var bottom = g.y + g.h;
+      if (tight) {
+        g.baselineY = g.hasDescender ? bottom - tightFrac * g.h : bottom;
+      } else {
+        g.baselineY = bottom - HIGHLIGHT_PADDED_TRIM * g.h;
+      }
+    });
+  });
 }
 
 // Resize-handle tuning (see handlePoints/handleAt/resizeAnnotation and
