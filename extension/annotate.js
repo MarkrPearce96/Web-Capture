@@ -201,6 +201,15 @@ var ANNOT_SIZES = [
   { cssPx: 8, dot: 9 },
 ];
 
+// Target-toggle glyphs for the text-box options popup. Text colour: a capital
+// "A" over a thick colour bar (the universal text-colour convention).
+// Background colour: an "A" sitting on a filled rounded box (fill-behind-text).
+// Both use currentColor so they pick up the button's active-blue / idle-grey.
+var TEXT_TARGET_ICON =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16 12 5l6 11"/><path d="M8.5 12h7"/><path d="M5 20h14" stroke-width="3"/></svg>';
+var BG_TARGET_ICON =
+  '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" stroke="none"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 16 11 7l4 9" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.7 12.5h4.6" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>';
+
 var ANNOT_TOOLS = [
   {
     id: "select",
@@ -403,19 +412,12 @@ function annotStyleText() {
       flex: none;
     }
     .annot-swatch.annot-bg-none {
-      position: relative;
-      background: #fff;
-    }
-    .annot-swatch.annot-bg-none::after {
-      content: "";
-      position: absolute;
-      inset: 2px;
-      border-top: 1.5px solid #ff3b30;
-      transform: rotate(45deg);
-    }
-    .annot-swatch.annot-disabled {
-      opacity: 0.35;
-      cursor: default;
+      background-color: #fff;
+      background-image:
+        linear-gradient(45deg, #c8c8c8 25%, transparent 25%, transparent 75%, #c8c8c8 75%),
+        linear-gradient(45deg, #c8c8c8 25%, transparent 25%, transparent 75%, #c8c8c8 75%);
+      background-size: 8px 8px;
+      background-position: 0 0, 4px 4px;
     }
     .annot-target-group {
       display: flex;
@@ -423,11 +425,13 @@ function annotStyleText() {
       gap: 2px;
     }
     .annot-target-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
       border: none;
       background: transparent;
-      color: #444;
-      font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
-      padding: 3px 8px;
+      color: #666;
+      padding: 4px 6px;
       border-radius: 6px;
       cursor: pointer;
       flex: none;
@@ -1413,22 +1417,18 @@ function createAnnotator(options) {
       );
     });
 
-    // "None" (transparent) only makes sense for the background target;
-    // while Text is active it's visible but inert, so the row never
-    // changes shape as the target toggles.
-    var noneSwatch = buildTextSwatch("No background", null, isBg && !annotation.bg, function () {
-      if (!isBg) {
-        return;
-      }
-      annotation.bg = null;
-      repaint();
-      refreshTextOptions(annotation);
-    });
-    noneSwatch.classList.add("annot-bg-none");
-    if (!isBg) {
-      noneSwatch.classList.add("annot-disabled");
+    // "None" (transparent) applies only to the background, so it's shown
+    // only while Background is the active target — a checkerboard swatch,
+    // the standard "no fill" indicator.
+    if (isBg) {
+      var noneSwatch = buildTextSwatch("No background", null, !annotation.bg, function () {
+        annotation.bg = null;
+        repaint();
+        refreshTextOptions(annotation);
+      });
+      noneSwatch.classList.add("annot-bg-none");
+      colorRow.appendChild(noneSwatch);
     }
-    colorRow.appendChild(noneSwatch);
 
     // Row 2: the target toggle (left) and the font-size stepper (right).
     var controlsRow = document.createElement("div");
@@ -1437,8 +1437,8 @@ function createAnnotator(options) {
     var targetGroup = document.createElement("div");
     targetGroup.className = "annot-target-group";
     [
-      { id: "text", label: "Text" },
-      { id: "bg", label: "Background" },
+      { id: "text", label: "Text colour", icon: TEXT_TARGET_ICON },
+      { id: "bg", label: "Background colour", icon: BG_TARGET_ICON },
     ].forEach(function (target) {
       var btn = document.createElement("button");
       btn.type = "button";
@@ -1446,7 +1446,9 @@ function createAnnotator(options) {
       if (textOptionsTarget === target.id) {
         btn.classList.add("annot-active");
       }
-      btn.textContent = target.label;
+      btn.innerHTML = target.icon;
+      btn.title = target.label;
+      btn.setAttribute("aria-label", target.label);
       btn.addEventListener("pointerdown", function (e) {
         e.preventDefault();
       });
