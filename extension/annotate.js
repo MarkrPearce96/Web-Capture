@@ -865,7 +865,10 @@ function createAnnotator(options) {
   // recoloured or made thicker/thinner after it's drawn, not just before.
   function selectColor(color) {
     selectedColor = color;
-    if (freshSelection && freshSelection.width !== undefined) {
+    // Applies to a selected stroke shape (has `width`) or a selected highlight
+    // — both carry a single `color`. Text is excluded: it has its own text /
+    // background colour controls in the text options popup.
+    if (freshSelection && (freshSelection.width !== undefined || freshSelection.tool === "highlight")) {
       freshSelection.color = color;
       repaint();
     }
