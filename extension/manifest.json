@@ -21,5 +21,5 @@
       "32": "images/toolbar-32.png"
     }
   },
-  "permissions": ["activeTab", "scripting"]
+  "permissions": ["activeTab", "scripting", "nativeMessaging"]
 }

@@ -43,13 +43,27 @@ function distancePointToSegment(px, py, x1, y1, x2, y2) {
 // coordinates) and renderComposite (identity transform, also natural px) —
 // see createAnnotator below for why those two coordinate spaces coincide.
 
+// Highlighter tuning: HIGHLIGHT_ALPHA is the fill/stroke opacity for both
+// word-snapped rects and the freehand fallback band (see
+// drawHighlightAnnotation); HIGHLIGHT_BAND_CSS is the freehand band's
+// default CSS-px thickness at creation time, converted to natural px the
+// same way ANNOT_SIZES.cssPx is (see onPointerDown's highlight branch).
+var HIGHLIGHT_ALPHA = 0.4;
+var HIGHLIGHT_BAND_CSS = 16;
+
 function drawAnnotation(ctx, a) {
-  // Text has no stroke (color/width apply to fill instead) and its own
-  // ctx.save/restore, so it's handled entirely separately, before the
-  // stroke-oriented setup below runs (that setup assumes `a.width` exists,
-  // which text annotations don't have).
+  // Text and Highlight annotations have no stroke (their color/width don't
+  // map onto strokeStyle/lineWidth the way every other tool's does) and each
+  // has its own ctx.save/restore, so both are handled entirely separately,
+  // before the stroke-oriented setup below runs (that setup assumes
+  // `a.width` exists, which neither of these annotations have).
   if (a.tool === "text") {
     drawTextAnnotation(ctx, a);
+    return;
+  }
+
+  if (a.tool === "highlight") {
+    drawHighlightAnnotation(ctx, a);
     return;
   }
 
@@ -128,6 +142,38 @@ function drawPenStroke(ctx, points) {
   var last = points[points.length - 1];
   ctx.lineTo(last.x, last.y);
   ctx.stroke();
+}
+
+// `a.rects` (word-snapped boxes) and `a.band` (freehand fallback polyline)
+// are spatially disjoint by construction (see addHighlightSample in
+// createAnnotator — a sampled point either lands in a word box or gets
+// added to the band, never both), so both can be drawn under one
+// globalAlpha without visibly compounding at their border. The rects are
+// unioned into a single fill path rather than filled one at a time so two
+// overlapping/adjacent word boxes don't double up their alpha either.
+function drawHighlightAnnotation(ctx, a) {
+  ctx.save();
+  ctx.globalAlpha = HIGHLIGHT_ALPHA;
+  ctx.fillStyle = a.color;
+  ctx.beginPath();
+  for (var i = 0; i < a.rects.length; i++) {
+    var r = a.rects[i];
+    ctx.rect(r.x, r.y, r.w, r.h);
+  }
+  ctx.fill();
+  if (a.band.length) {
+    ctx.strokeStyle = a.color;
+    ctx.lineWidth = a.bandWidth;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(a.band[0].x, a.band[0].y);
+    for (var j = 1; j < a.band.length; j++) {
+      ctx.lineTo(a.band[j].x, a.band[j].y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // The font string text annotations are always measured/drawn with — kept in
@@ -235,6 +281,12 @@ var ANNOT_TOOLS = [
     label: "Pen",
     icon:
       '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
+  },
+  {
+    id: "highlight",
+    label: "Highlighter",
+    icon:
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>',
   },
   {
     id: "line",
@@ -488,6 +540,20 @@ function annotStyleText() {
       color: #444;
       flex: none;
     }
+    .annot-scan-pill {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 6px 12px;
+      background: rgba(20, 20, 20, 0.85);
+      color: #fff;
+      font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+      border-radius: 999px;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 4;
+    }
   `;
 }
 
@@ -555,6 +621,23 @@ function createAnnotator(options) {
   // (open a new editor there) apart from a drag (do nothing — text has no
   // drag-to-draw). Natural px, cleared on that pointerup/pointercancel.
   var textDownPt = null;
+  // Word boxes from the on-device OCR scan (see scanText), in natural px, or
+  // null before the first scan / on failure. Cached for this annotator
+  // instance's whole life — a new capture creates a new annotator (see
+  // content.js's createAnnotator call), so there's no stale-reuse risk.
+  var ocrWords = null;
+  // "idle" (never scanned yet) | "scanning" | "done" | "error". Drives
+  // scanText's one-shot-per-instance guard in selectTool.
+  var ocrState = "idle";
+  // The "Scanning text…" pill element (see showScanPill/hideScanPill), or
+  // null while hidden. A plain DOM element appended to `wrapper`, never
+  // drawn on canvas, so it can never leak into an export.
+  var scanPillEl = null;
+  // Natural-px point of the highlighter's last processed sample (pointerdown
+  // or the previous pointermove), used by addHighlightSample to interpolate
+  // across fast drags so they don't skip over word boxes between two
+  // pointermove events. Reset on every highlight pointerdown.
+  var lastHighlightPt = null;
   var selectedTool = null;
   var selectedColor = ANNOT_COLORS[0];
   var selectedSizeCssPx = ANNOT_SIZES[1].cssPx; // M, a reasonable middle default
@@ -703,6 +786,13 @@ function createAnnotator(options) {
       commitTextEditor();
     }
     applyToolState(toolId);
+    // First switch to Highlighter this capture: kick off the OCR scan in
+    // the background. Fire-and-forget — scanText manages its own
+    // scanning/done/error state and never blocks tool selection; the
+    // highlighter works freehand-only until (or if) it resolves.
+    if (toolId === "highlight" && ocrState === "idle") {
+      scanText();
+    }
     var changed = false;
     if (freshSelection) {
       freshSelection = null;
@@ -866,9 +956,41 @@ function createAnnotator(options) {
       var tb = textBounds(ctx, a);
       return { x: tb.x0, y: tb.y0, w: tb.x1 - tb.x0, h: tb.y1 - tb.y0 };
     }
+    if (a.tool === "highlight") {
+      return highlightBoundingBox(a);
+    }
     var x = Math.min(a.x0, a.x1);
     var y = Math.min(a.y0, a.y1);
     return { x: x, y: y, w: Math.abs(a.x1 - a.x0), h: Math.abs(a.y1 - a.y0) };
+  }
+
+  // Union bbox of every rect and band point, band points padded by
+  // bandWidth/2 (a band point's actual painted extent, since the stroke is
+  // centered on the polyline — see drawHighlightAnnotation). Guaranteed at
+  // least one of rects/band is non-empty by isNonDegenerate, so `minX` etc.
+  // are always set by the time either loop below would need them — but the
+  // undefined check is kept anyway as a defensive fallback.
+  function highlightBoundingBox(a) {
+    var minX, minY, maxX, maxY;
+    for (var i = 0; i < a.rects.length; i++) {
+      var r = a.rects[i];
+      minX = minX === undefined ? r.x : Math.min(minX, r.x);
+      minY = minY === undefined ? r.y : Math.min(minY, r.y);
+      maxX = maxX === undefined ? r.x + r.w : Math.max(maxX, r.x + r.w);
+      maxY = maxY === undefined ? r.y + r.h : Math.max(maxY, r.y + r.h);
+    }
+    var pad = a.bandWidth / 2;
+    for (var j = 0; j < a.band.length; j++) {
+      var p = a.band[j];
+      minX = minX === undefined ? p.x - pad : Math.min(minX, p.x - pad);
+      minY = minY === undefined ? p.y - pad : Math.min(minY, p.y - pad);
+      maxX = maxX === undefined ? p.x + pad : Math.max(maxX, p.x + pad);
+      maxY = maxY === undefined ? p.y + pad : Math.max(maxY, p.y + pad);
+    }
+    if (minX === undefined) {
+      return { x: 0, y: 0, w: 0, h: 0 };
+    }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
   }
 
   // ---- Select tool: hit-testing + move ----
@@ -906,6 +1028,37 @@ function createAnnotator(options) {
     }
     if (a.tool === "rect" || a.tool === "ellipse") {
       return hitBox(a, { x: px, y: py }, tol);
+    }
+    if (a.tool === "highlight") {
+      return hitHighlight(a, px, py);
+    }
+    return false;
+  }
+
+  // Hit if the point falls inside any word rect (expanded by the usual 8
+  // CSS px fudge factor, same as the other no-stroke-width case above,
+  // text) or within bandWidth/2 (the band's actual painted half-thickness)
+  // plus that same fudge factor of any band segment.
+  function hitHighlight(a, px, py) {
+    var tol = 8 / scale;
+    for (var i = 0; i < a.rects.length; i++) {
+      var r = a.rects[i];
+      if (px >= r.x - tol && px <= r.x + r.w + tol && py >= r.y - tol && py <= r.y + r.h + tol) {
+        return true;
+      }
+    }
+    if (a.band.length === 0) {
+      return false;
+    }
+    var bandTol = a.bandWidth / 2 + tol;
+    if (a.band.length === 1) {
+      var only = a.band[0];
+      return Math.hypot(px - only.x, py - only.y) <= bandTol;
+    }
+    for (var j = 0; j < a.band.length - 1; j++) {
+      if (distancePointToSegment(px, py, a.band[j].x, a.band[j].y, a.band[j + 1].x, a.band[j + 1].y) <= bandTol) {
+        return true;
+      }
     }
     return false;
   }
@@ -947,10 +1100,365 @@ function createAnnotator(options) {
       a.y += dy;
       return;
     }
+    if (a.tool === "highlight") {
+      for (var j = 0; j < a.rects.length; j++) {
+        a.rects[j].x += dx;
+        a.rects[j].y += dy;
+      }
+      for (var k = 0; k < a.band.length; k++) {
+        a.band[k].x += dx;
+        a.band[k].y += dy;
+      }
+      // Keep the source words in step with the moved bars so a later
+      // click-to-link adjacency test uses the highlight's current position.
+      if (a.words) {
+        for (var m = 0; m < a.words.length; m++) {
+          a.words[m] = {
+            x: a.words[m].x + dx,
+            y: a.words[m].y + dy,
+            w: a.words[m].w,
+            h: a.words[m].h,
+            breakAfter: a.words[m].breakAfter,
+          };
+        }
+      }
+      return;
+    }
     a.x0 += dx;
     a.y0 += dy;
     a.x1 += dx;
     a.y1 += dy;
+  }
+
+  // ---- Highlighter tool: OCR scan + word-snap/freehand sampling ----
+
+  // Fires the on-device OCR scan for this capture, once (see selectTool's
+  // ocrState === "idle" guard — every later Highlighter selection is a
+  // no-op here). Fire-and-forget: never blocks tool selection, and the
+  // highlighter still works in freehand-fallback-only mode the whole time
+  // it's scanning (ocrWords stays null until/unless this resolves
+  // successfully).
+  async function scanText() {
+    ocrState = "scanning";
+    showScanPill("Scanning text…");
+    try {
+      var sourceMaxSide = Math.max(sourceCanvas.width, sourceCanvas.height);
+      var ocrCanvas = sourceCanvas;
+      var ocrScale = 1;
+      if (sourceMaxSide > 4096) {
+        var tempMaxSide = 4096;
+        ocrScale = tempMaxSide / sourceMaxSide;
+        ocrCanvas = document.createElement("canvas");
+        ocrCanvas.width = Math.round(sourceCanvas.width * ocrScale);
+        ocrCanvas.height = Math.round(sourceCanvas.height * ocrScale);
+        ocrCanvas.getContext("2d").drawImage(sourceCanvas, 0, 0, ocrCanvas.width, ocrCanvas.height);
+      }
+      var dataUrl = ocrCanvas.toDataURL("image/jpeg", 0.85);
+      var base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+      var resp = await browser.runtime.sendMessage({ type: "ocrRequest", image: base64 });
+      if (destroyed) {
+        // The overlay was closed while the native round trip was in
+        // flight — nothing left to update.
+        return;
+      }
+      if (resp && resp.ok) {
+        // Map each word box back to natural px: it came back in pixel
+        // coordinates of whatever image was actually sent (ocrCanvas),
+        // which is sourceCanvas scaled down by ocrScale when downscaling
+        // kicked in above (ocrScale stays 1, a no-op divide, otherwise).
+        ocrWords = resp.words.map(function (w) {
+          var text = w.text || "";
+          return {
+            x: w.x / ocrScale,
+            y: w.y / ocrScale,
+            w: w.w / ocrScale,
+            h: w.h / ocrScale,
+            // A run of highlighted words merges into one bar unless the word
+            // ends a clause/sentence — then the highlight breaks after it.
+            breakAfter: /[.,;:!?]$/.test(text),
+          };
+        });
+        ocrState = "done";
+      } else {
+        ocrState = "error";
+        await flashScanPill("Couldn’t scan text");
+      }
+    } catch (err) {
+      if (!destroyed) {
+        ocrState = "error";
+        await flashScanPill("Couldn’t scan text");
+      }
+    } finally {
+      hideScanPill();
+    }
+  }
+
+  function showScanPill(text) {
+    if (scanPillEl) {
+      scanPillEl.textContent = text;
+      return;
+    }
+    var el = document.createElement("div");
+    el.className = "annot-scan-pill";
+    el.textContent = text;
+    wrapper.appendChild(el);
+    scanPillEl = el;
+  }
+
+  function hideScanPill() {
+    if (scanPillEl) {
+      scanPillEl.remove();
+      scanPillEl = null;
+    }
+  }
+
+  // Briefly swaps the pill to an error message before scanText's `finally`
+  // hides it, so a failed scan is visible for a moment instead of the pill
+  // just silently vanishing.
+  function flashScanPill(text) {
+    if (scanPillEl) {
+      scanPillEl.textContent = text;
+    }
+    return new Promise(function (resolve) {
+      setTimeout(resolve, 1200);
+    });
+  }
+
+  // True if natural-px point (px,py) falls inside word box r.
+  function pointInWordBox(px, py, r) {
+    return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+  }
+
+  function findWordAt(px, py) {
+    if (!ocrWords) {
+      return null;
+    }
+    for (var i = 0; i < ocrWords.length; i++) {
+      if (pointInWordBox(px, py, ocrWords[i])) {
+        return ocrWords[i];
+      }
+    }
+    return null;
+  }
+
+  // True if (px,py) is within a padded margin of any detected word — i.e. in
+  // "text territory" (an inter-word gap, or a little above/below a line). Used
+  // to suppress the freehand band there, so dragging the highlighter across a
+  // line of text produces only the clean snapped word bars, not a freehand
+  // smear over the gaps and wobble. The freehand fallback then only appears
+  // where there's genuinely no nearby text (over an image or blank space).
+  function nearAnyWord(px, py) {
+    if (!ocrWords) {
+      return false;
+    }
+    for (var i = 0; i < ocrWords.length; i++) {
+      var wd = ocrWords[i];
+      var padX = wd.h * 0.5;
+      var padY = wd.h * 0.7;
+      if (px >= wd.x - padX && px <= wd.x + wd.w + padX && py >= wd.y - padY && py <= wd.y + wd.h + padY) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function wordAlreadyIncluded(words, r) {
+    for (var i = 0; i < words.length; i++) {
+      var e = words[i];
+      if (e.x === r.x && e.y === r.y && e.w === r.w && e.h === r.h) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Overlap of two boxes' vertical extents, in natural px (negative if they
+  // don't share any rows) — the "are these on the same line?" test.
+  function verticalOverlap(a, b) {
+    return Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  }
+
+  // Turns the set of picked words into highlight bars: words on the same line
+  // that sit next to each other merge into one continuous bar (filling the
+  // inter-word gaps), but the run breaks after any word that ends a clause or
+  // sentence (comma, full stop, etc. — see `breakAfter`). Words separated by a
+  // large gap (an un-highlighted word between them) also start a new bar.
+  function mergeHighlightWords(words) {
+    if (!words.length) {
+      return [];
+    }
+    // Bucket into lines by vertical overlap.
+    var lines = [];
+    words
+      .slice()
+      .sort(function (a, b) {
+        return a.y - b.y;
+      })
+      .forEach(function (w) {
+        for (var i = 0; i < lines.length; i++) {
+          var L = lines[i];
+          if (verticalOverlap(L, w) > 0.5 * Math.min(L.h, w.h)) {
+            L.words.push(w);
+            var bottom = Math.max(L.y + L.h, w.y + w.h);
+            L.y = Math.min(L.y, w.y);
+            L.h = bottom - L.y;
+            return;
+          }
+        }
+        lines.push({ y: w.y, h: w.h, words: [w] });
+      });
+
+    var rects = [];
+    lines.forEach(function (L) {
+      L.words.sort(function (a, b) {
+        return a.x - b.x;
+      });
+      var run = null;
+      var prev = null;
+      L.words.forEach(function (w) {
+        var avgH = prev ? (prev.h + w.h) / 2 : w.h;
+        var gap = prev ? w.x - (prev.x + prev.w) : 0;
+        // Adjacent = a small gap (roughly one space) and the previous word
+        // didn't close a clause/sentence.
+        var adjacent = prev && !prev.breakAfter && gap < 0.6 * avgH && gap > -avgH;
+        if (run && adjacent) {
+          run.x1 = Math.max(run.x1, w.x + w.w);
+          run.y0 = Math.min(run.y0, w.y);
+          run.y1 = Math.max(run.y1, w.y + w.h);
+        } else {
+          if (run) {
+            rects.push({ x: run.x0, y: run.y0, w: run.x1 - run.x0, h: run.y1 - run.y0 });
+          }
+          run = { x0: w.x, y0: w.y, x1: w.x + w.w, y1: w.y + w.h };
+        }
+        prev = w;
+      });
+      if (run) {
+        rects.push({ x: run.x0, y: run.y0, w: run.x1 - run.x0, h: run.y1 - run.y0 });
+      }
+    });
+    return rects;
+  }
+
+  // Natural-px sampling step for addHighlightSample below — comfortably
+  // smaller than a typical word's width/height so a fast drag can't skip
+  // clean over a whole word between two pointer events.
+  var HIGHLIGHT_SAMPLE_STEP = 6;
+
+  // Samples the segment prevPt -> pt (inclusive of pt; a single sample at
+  // pt itself when prevPt === pt, i.e. the initial pointerdown) and, for
+  // each sample, either records the detected word under it (deduped into
+  // inProgress.words by exact box match, so re-crossing the same word doesn't
+  // add it twice) or — no word under that sample — appends the raw point to
+  // inProgress.band, the freehand fallback polyline. After collecting words,
+  // rebuilds inProgress.rects by merging same-line adjacent words into
+  // continuous bars (breaking at punctuation). Called from both onPointerDown
+  // (prevPt = pt) and onPointerMove (prevPt = lastHighlightPt) so the two
+  // share one sampling/dedup implementation.
+  function addHighlightSample(inProgress, pt, prevPt) {
+    var dx = pt.x - prevPt.x;
+    var dy = pt.y - prevPt.y;
+    var dist = Math.hypot(dx, dy);
+    var steps = Math.max(1, Math.ceil(dist / HIGHLIGHT_SAMPLE_STEP));
+    var addedWord = false;
+    for (var i = 1; i <= steps; i++) {
+      var t = i / steps;
+      var sx = prevPt.x + dx * t;
+      var sy = prevPt.y + dy * t;
+      var word = findWordAt(sx, sy);
+      if (word) {
+        if (!wordAlreadyIncluded(inProgress.words, word)) {
+          inProgress.words.push(word);
+          addedWord = true;
+        }
+      } else if (!nearAnyWord(sx, sy)) {
+        // Only lay down freehand where there's no nearby text — inter-word
+        // gaps and slight vertical wobble over a highlighted line are covered
+        // by the merged word bars instead.
+        inProgress.band.push({ x: sx, y: sy });
+      }
+    }
+    if (addedWord) {
+      inProgress.rects = mergeHighlightWords(inProgress.words);
+    }
+  }
+
+  // True if two words sit next to each other on the same line with only a
+  // word-gap between them and the left one doesn't close a clause — the same
+  // rule mergeHighlightWords uses within a stroke, but applied across two
+  // separate highlights so a newly-clicked word can link onto an existing bar.
+  function wordsAdjacent(a, b) {
+    if (verticalOverlap(a, b) <= 0.5 * Math.min(a.h, b.h)) {
+      return false;
+    }
+    var left = a.x <= b.x ? a : b;
+    var right = a.x <= b.x ? b : a;
+    if (left.breakAfter) {
+      return false;
+    }
+    var avgH = (a.h + b.h) / 2;
+    var gap = right.x - (left.x + left.w);
+    return gap < 0.6 * avgH && gap > -avgH;
+  }
+
+  function highlightsConnect(wordsA, wordsB) {
+    for (var i = 0; i < wordsA.length; i++) {
+      for (var j = 0; j < wordsB.length; j++) {
+        if (wordsAdjacent(wordsA[i], wordsB[j])) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function dedupeWords(words) {
+    var out = [];
+    for (var i = 0; i < words.length; i++) {
+      if (!wordAlreadyIncluded(out, words[i])) {
+        out.push(words[i]);
+      }
+    }
+    return out;
+  }
+
+  // Before a freshly finished word-highlight is committed, fold in any
+  // existing highlights it now touches (adjacent same-line words with no
+  // punctuation break between), so clicking a word beside an existing bar
+  // links them into one continuous highlight. Removes the absorbed
+  // annotations and returns the combined one (bars recomputed).
+  function absorbAdjacentHighlights(nh) {
+    var connected = [];
+    for (var i = 0; i < annotations.length; i++) {
+      var a = annotations[i];
+      if (a.tool === "highlight" && a.words && a.words.length && highlightsConnect(a.words, nh.words)) {
+        connected.push(a);
+      }
+    }
+    if (!connected.length) {
+      return nh;
+    }
+    var allWords = nh.words.slice();
+    var allBand = (nh.band || []).slice();
+    connected.forEach(function (a) {
+      allWords = allWords.concat(a.words);
+      if (a.band) {
+        allBand = allBand.concat(a.band);
+      }
+    });
+    annotations = annotations.filter(function (a) {
+      return connected.indexOf(a) === -1;
+    });
+    var merged = {
+      tool: "highlight",
+      color: nh.color,
+      words: dedupeWords(allWords),
+      band: allBand,
+      bandWidth: nh.bandWidth,
+      rects: [],
+    };
+    merged.rects = mergeHighlightWords(merged.words);
+    return merged;
   }
 
   // ---- pointer flow ----
@@ -963,6 +1471,9 @@ function createAnnotator(options) {
   function isNonDegenerate(a) {
     if (a.tool === "pen") {
       return a.points.length >= 2;
+    }
+    if (a.tool === "highlight") {
+      return a.rects.length > 0 || a.band.length >= 2;
     }
     return Math.abs(a.x1 - a.x0) + Math.abs(a.y1 - a.y0) >= 3;
   }
@@ -1038,6 +1549,16 @@ function createAnnotator(options) {
       return;
     }
 
+    if (selectedTool === "highlight") {
+      layer.setPointerCapture(e.pointerId);
+      activePointerId = e.pointerId;
+      inProgress = { tool: "highlight", color: selectedColor, words: [], rects: [], band: [], bandWidth: HIGHLIGHT_BAND_CSS / scale };
+      lastHighlightPt = pt;
+      addHighlightSample(inProgress, pt, pt);
+      repaint();
+      return;
+    }
+
     layer.setPointerCapture(e.pointerId);
     activePointerId = e.pointerId;
     var widthNatural = selectedSizeCssPx / scale;
@@ -1078,6 +1599,9 @@ function createAnnotator(options) {
     var pt = toNatural(e);
     if (inProgress.tool === "pen") {
       inProgress.points.push(pt);
+    } else if (inProgress.tool === "highlight") {
+      addHighlightSample(inProgress, pt, lastHighlightPt || pt);
+      lastHighlightPt = pt;
     } else {
       var x1 = pt.x;
       var y1 = pt.y;
@@ -1148,7 +1672,11 @@ function createAnnotator(options) {
     var finished = inProgress;
     inProgress = null;
     activePointerId = null;
+    lastHighlightPt = null;
     if (isNonDegenerate(finished)) {
+      if (finished.tool === "highlight" && finished.words && finished.words.length) {
+        finished = absorbAdjacentHighlights(finished);
+      }
       annotations.push(finished);
       freshSelection = finished;
       updateFreshHoverCursor(pt);
@@ -1577,6 +2105,7 @@ function createAnnotator(options) {
       textEditorEl = null;
     }
     hideTextOptions();
+    hideScanPill();
     activeText = null;
     freshSelection = null;
     updateFreshHoverCursor(null);
