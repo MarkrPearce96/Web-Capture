@@ -89,7 +89,7 @@ var HIGHLIGHT_BAND_CSS = 16;
 // Applied only to the drawn bars — hit-detection keeps the full box.
 var HIGHLIGHT_TOP_TRIM = 0.0;
 var HIGHLIGHT_DESCENDER_TRIM = 0.27;
-var HIGHLIGHT_BOTTOM_EXTEND = 0.06;
+var HIGHLIGHT_BOTTOM_EXTEND = 0.12;
 // Characters with ink below the baseline: lowercase descenders plus comma and
 // semicolon (the usual culprit on a trailing word like "Sustainable,").
 var HIGHLIGHT_DESCENDER_RE = /[gjpqy,;]/;
