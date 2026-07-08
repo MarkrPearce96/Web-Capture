@@ -78,12 +78,19 @@ var HANDLE_CURSORS = {
 // same way ANNOT_SIZES.cssPx is (see onPointerDown's highlight branch).
 var HIGHLIGHT_ALPHA = 0.4;
 var HIGHLIGHT_BAND_CSS = 16;
-// Vision's word boxes carry vertical slack (leading/descender space) that,
-// on big text, makes a highlight bar spill toward the line below. Trim this
-// fraction off the top and bottom of each rendered bar so it hugs the text.
-// Applied only to the drawn bars — hit-detection keeps the full box, so
-// highlighting stays easy to trigger.
-var HIGHLIGHT_TIGHTEN = 0.16;
+// Vision's word boxes run from the tallest ink down to the lowest descender
+// (a comma's tail, a g/y/p), so a bar spills below the letters toward the
+// next line. The rendered bars are fitted from the tallest letter (top) to
+// the letter BASELINE (bottom), excluding descenders: HIGHLIGHT_TOP_TRIM
+// clears a little leading above the caps; HIGHLIGHT_DESCENDER_TRIM is the
+// fraction of a descender-bearing word's box height taken to be below the
+// baseline. Applied only to the drawn bars — hit-detection keeps the full
+// box so highlighting stays easy to trigger.
+var HIGHLIGHT_TOP_TRIM = 0.05;
+var HIGHLIGHT_DESCENDER_TRIM = 0.15;
+// Characters that dip below the baseline: lowercase descenders plus comma and
+// semicolon (the usual culprit on a trailing word like "Sustainable,").
+var HIGHLIGHT_DESCENDER_RE = /[gjpqy,;]/;
 
 // Resize-handle tuning (see handlePoints/handleAt/resizeAnnotation and
 // drawSelectionCue's handle rendering in createAnnotator): HANDLE_CSS is the
@@ -1247,6 +1254,7 @@ function createAnnotator(options) {
             w: a.words[m].w,
             h: a.words[m].h,
             breakAfter: a.words[m].breakAfter,
+            hasDescender: a.words[m].hasDescender,
           };
         }
       }
@@ -1397,6 +1405,9 @@ function createAnnotator(options) {
             // A run of highlighted words merges into one bar unless the word
             // ends a clause/sentence — then the highlight breaks after it.
             breakAfter: /[.,;:!?]$/.test(text),
+            // Whether the word has ink below the baseline, so the bar bottom
+            // can be lifted to the baseline for it (see mergeHighlightWords).
+            hasDescender: HIGHLIGHT_DESCENDER_RE.test(text),
           };
         });
         ocrState = "done";
@@ -1529,12 +1540,24 @@ function createAnnotator(options) {
         lines.push({ y: w.y, h: w.h, words: [w] });
       });
 
-    // A finished run -> a drawn bar, trimmed vertically toward its centre so
-    // it hugs the text rather than the looser OCR box.
+    // A word's baseline (bottom of the letters): the box bottom for a word
+    // with no descender, or that minus the descender allowance for one that
+    // has ink below the baseline (a comma tail, a g/y). For a run of several
+    // words the true baseline comes from the non-descender words (their box
+    // bottom IS the baseline); a lone descender-bearing word falls back to the
+    // estimate.
+    function wordBaseline(w) {
+      var bottom = w.y + w.h;
+      return w.hasDescender ? bottom - HIGHLIGHT_DESCENDER_TRIM * w.h : bottom;
+    }
+
+    // A finished run -> a drawn bar spanning the tallest ink (top, minus a
+    // little leading) down to the letter baseline, so descenders poke through
+    // rather than dragging the bar into the next line.
     function runRect(run) {
-      var h = run.y1 - run.y0;
-      var inset = h * HIGHLIGHT_TIGHTEN;
-      return { x: run.x0, y: run.y0 + inset, w: run.x1 - run.x0, h: h - 2 * inset };
+      var textH = run.baseline - run.top;
+      var top = run.top + textH * HIGHLIGHT_TOP_TRIM;
+      return { x: run.x0, y: top, w: run.x1 - run.x0, h: run.baseline - top };
     }
 
     var rects = [];
@@ -1550,15 +1573,16 @@ function createAnnotator(options) {
         // Adjacent = a small gap (roughly one space) and the previous word
         // didn't close a clause/sentence.
         var adjacent = prev && !prev.breakAfter && gap < 0.6 * avgH && gap > -avgH;
+        var wb = wordBaseline(w);
         if (run && adjacent) {
           run.x1 = Math.max(run.x1, w.x + w.w);
-          run.y0 = Math.min(run.y0, w.y);
-          run.y1 = Math.max(run.y1, w.y + w.h);
+          run.top = Math.min(run.top, w.y);
+          run.baseline = Math.max(run.baseline, wb);
         } else {
           if (run) {
             rects.push(runRect(run));
           }
-          run = { x0: w.x, y0: w.y, x1: w.x + w.w, y1: w.y + w.h };
+          run = { x0: w.x, x1: w.x + w.w, top: w.y, baseline: wb };
         }
         prev = w;
       });
@@ -1599,7 +1623,7 @@ function createAnnotator(options) {
         if (!wordAlreadyIncluded(inProgress.words, word)) {
           // Store a copy so clearing its break flag below can't corrupt the
           // shared OCR word list (or another highlight's words).
-          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter };
+          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter, hasDescender: word.hasDescender };
           // A drag that sweeps across adjacent words links them even across a
           // comma or full stop: clear the break flag on the left of each
           // adjacent in-stroke pair. A single click adds one word with no
