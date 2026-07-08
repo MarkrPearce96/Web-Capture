@@ -78,6 +78,12 @@ var HANDLE_CURSORS = {
 // same way ANNOT_SIZES.cssPx is (see onPointerDown's highlight branch).
 var HIGHLIGHT_ALPHA = 0.4;
 var HIGHLIGHT_BAND_CSS = 16;
+// Vision's word boxes carry vertical slack (leading/descender space) that,
+// on big text, makes a highlight bar spill toward the line below. Trim this
+// fraction off the top and bottom of each rendered bar so it hugs the text.
+// Applied only to the drawn bars — hit-detection keeps the full box, so
+// highlighting stays easy to trigger.
+var HIGHLIGHT_TIGHTEN = 0.16;
 
 // Resize-handle tuning (see handlePoints/handleAt/resizeAnnotation and
 // drawSelectionCue's handle rendering in createAnnotator): HANDLE_CSS is the
@@ -1523,6 +1529,14 @@ function createAnnotator(options) {
         lines.push({ y: w.y, h: w.h, words: [w] });
       });
 
+    // A finished run -> a drawn bar, trimmed vertically toward its centre so
+    // it hugs the text rather than the looser OCR box.
+    function runRect(run) {
+      var h = run.y1 - run.y0;
+      var inset = h * HIGHLIGHT_TIGHTEN;
+      return { x: run.x0, y: run.y0 + inset, w: run.x1 - run.x0, h: h - 2 * inset };
+    }
+
     var rects = [];
     lines.forEach(function (L) {
       L.words.sort(function (a, b) {
@@ -1542,14 +1556,14 @@ function createAnnotator(options) {
           run.y1 = Math.max(run.y1, w.y + w.h);
         } else {
           if (run) {
-            rects.push({ x: run.x0, y: run.y0, w: run.x1 - run.x0, h: run.y1 - run.y0 });
+            rects.push(runRect(run));
           }
           run = { x0: w.x, y0: w.y, x1: w.x + w.w, y1: w.y + w.h };
         }
         prev = w;
       });
       if (run) {
-        rects.push({ x: run.x0, y: run.y0, w: run.x1 - run.x0, h: run.y1 - run.y0 });
+        rects.push(runRect(run));
       }
     });
     return rects;
