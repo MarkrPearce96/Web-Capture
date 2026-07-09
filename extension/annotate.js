@@ -1,6 +1,7 @@
 "use strict";
 
-// Markup tools (pen/line/arrow/rectangle/ellipse) for the preview overlay.
+// Markup tools (pen/line/arrow/shapes — rectangle/ellipse/triangle/diamond/
+// star) for the preview overlay.
 // Injected between pdf.js and content.js (see background.js's
 // injectScripts) — content.js owns the overlay chrome and calls
 // createAnnotator() once the preview <img> has finished loading. Also
@@ -38,19 +39,27 @@ function distancePointToSegment(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - cx, py - cy);
 }
 
+// True for any of the five box-shape tools (see ANNOT_SHAPES below) — every
+// place that used to special-case "rect || ellipse" now special-cases
+// "isShapeTool" instead, since all five draw/hit-test/resize the same way
+// within a drag bounding box.
+function isShapeTool(id) {
+  return id === "rect" || id === "ellipse" || id === "triangle" || id === "diamond" || id === "star";
+}
+
 // Which annotation shapes show resize handles when selected (see
 // handlePoints/handleAt/resizeAnnotation and drawSelectionCue's handle
-// rendering, all in createAnnotator below, where `scale` lives) — rect and
-// ellipse get 8 bounding-box handles, line and arrow get 2 endpoint
-// handles. Pen, text, and highlight stay move-only: their shapes don't
-// reduce to editable corners/endpoints the same way.
+// rendering, all in createAnnotator below, where `scale` lives) — the five
+// box shapes (isShapeTool) get 8 bounding-box handles, line and arrow get 2
+// endpoint handles. Pen, text, and highlight stay move-only: their shapes
+// don't reduce to editable corners/endpoints the same way.
 function isResizable(a) {
-  return a.tool === "rect" || a.tool === "ellipse" || a.tool === "line" || a.tool === "arrow";
+  return isShapeTool(a.tool) || a.tool === "line" || a.tool === "arrow";
 }
 
 // Cursor shown while hovering a resize handle (see onPointerMove's
 // plain-hover branch), keyed by handle id — the standard diagonal/straight
-// resize cursors for the 8 rect/ellipse box handles, and a move cursor for
+// resize cursors for the 8 box-shape handles, and a move cursor for
 // line/arrow's 2 endpoint handles (dragging either just relocates that end,
 // which reads more like "move" than "resize").
 var HANDLE_CURSORS = {
@@ -175,6 +184,65 @@ function drawAnnotation(ctx, a) {
     var eh = Math.abs(a.y1 - a.y0);
     ctx.beginPath();
     ctx.ellipse(ex + ew / 2, ey + eh / 2, ew / 2, eh / 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    return;
+  }
+
+  if (a.tool === "triangle") {
+    var tLeft = Math.min(a.x0, a.x1);
+    var tTop = Math.min(a.y0, a.y1);
+    var tW = Math.abs(a.x1 - a.x0);
+    var tH = Math.abs(a.y1 - a.y0);
+    ctx.beginPath();
+    ctx.moveTo(tLeft + tW / 2, tTop);
+    ctx.lineTo(tLeft, tTop + tH);
+    ctx.lineTo(tLeft + tW, tTop + tH);
+    ctx.closePath();
+    ctx.stroke();
+    return;
+  }
+
+  if (a.tool === "diamond") {
+    var dLeft = Math.min(a.x0, a.x1);
+    var dTop = Math.min(a.y0, a.y1);
+    var dW = Math.abs(a.x1 - a.x0);
+    var dH = Math.abs(a.y1 - a.y0);
+    ctx.beginPath();
+    ctx.moveTo(dLeft + dW / 2, dTop);
+    ctx.lineTo(dLeft + dW, dTop + dH / 2);
+    ctx.lineTo(dLeft + dW / 2, dTop + dH);
+    ctx.lineTo(dLeft, dTop + dH / 2);
+    ctx.closePath();
+    ctx.stroke();
+    return;
+  }
+
+  if (a.tool === "star") {
+    // Five-point star inscribed in the drag box: alternating outer/inner
+    // radii every 36° starting straight up, same normalize-then-stroke
+    // pattern as the other box shapes above.
+    var sLeft = Math.min(a.x0, a.x1);
+    var sTop = Math.min(a.y0, a.y1);
+    var sW = Math.abs(a.x1 - a.x0);
+    var sH = Math.abs(a.y1 - a.y0);
+    var cx = sLeft + sW / 2;
+    var cy = sTop + sH / 2;
+    var srx = sW / 2;
+    var sry = sH / 2;
+    var inner = 0.42;
+    ctx.beginPath();
+    for (var si = 0; si < 10; si++) {
+      var ang = -Math.PI / 2 + si * (Math.PI / 5);
+      var r = si % 2 === 0 ? 1 : inner;
+      var sx = cx + Math.cos(ang) * srx * r;
+      var sy = cy + Math.sin(ang) * sry * r;
+      if (si === 0) {
+        ctx.moveTo(sx, sy);
+      } else {
+        ctx.lineTo(sx, sy);
+      }
+    }
+    ctx.closePath();
     ctx.stroke();
   }
 }
@@ -361,6 +429,21 @@ var ANNOT_TOOLS = [
       '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="19" x2="19" y2="5"/><polyline points="9 5 19 5 19 15"/></svg>',
   },
   {
+    id: "text",
+    label: "Text",
+    icon:
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 5h14M12 5v14"/></svg>',
+  },
+];
+
+// The five box-shape tools, picked from the toolbar's Shapes flyout (see
+// buildToolbar/toggleShapeFlyout in createAnnotator) rather than being their
+// own toolbar buttons — unlike ANNOT_TOOLS, `id` here doubles as the
+// annotation's `tool` value exactly the same way (isShapeTool below matches
+// on it), so no separate mapping is needed between flyout choice and drawn
+// shape.
+var ANNOT_SHAPES = [
+  {
     id: "rect",
     label: "Rectangle",
     icon:
@@ -373,16 +456,48 @@ var ANNOT_TOOLS = [
       '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10" cy="10" r="6.5"/></svg>',
   },
   {
-    id: "text",
-    label: "Text",
+    id: "triangle",
+    label: "Triangle",
     icon:
-      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 5h14M12 5v14"/></svg>',
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 4 21 20 3 20Z"/></svg>',
+  },
+  {
+    id: "diamond",
+    label: "Diamond",
+    icon:
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 21 12 12 21 3 12Z"/></svg>',
+  },
+  {
+    id: "star",
+    label: "Star",
+    icon:
+      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.4 5.4 5.9.5-4.5 3.9 1.4 5.8L12 16.9 6.4 19.5l1.4-5.8L3.3 9.4l5.9-.5z"/></svg>',
   },
 ];
+
+// Looks up an ANNOT_SHAPES entry by id, falling back to the first shape
+// (rect) so a corrupt/unknown `selectedShape` (should never happen — it's
+// only ever set from an ANNOT_SHAPES id, see pickShape) can't leave the
+// Shapes button's icon blank.
+function shapeById(id) {
+  for (var i = 0; i < ANNOT_SHAPES.length; i++) {
+    if (ANNOT_SHAPES[i].id === id) {
+      return ANNOT_SHAPES[i];
+    }
+  }
+  return ANNOT_SHAPES[0];
+}
+
+// Small caret appended after the current shape's icon on the toolbar's
+// Shapes button (see updateShapesButton in createAnnotator), signaling it
+// opens a picker rather than drawing directly like the other tool buttons.
+var CARET_SVG =
+  '<svg class="annot-caret" viewBox="0 0 10 6" width="8" height="5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l4 4 4-4"/></svg>';
 
 function annotStyleText() {
   return `
     .annot-toolbar {
+      position: relative;
       display: flex;
       align-items: center;
       gap: 10px;
@@ -426,6 +541,44 @@ function annotStyleText() {
     }
     .annot-tool-btn.annot-active {
       background: rgba(34, 115, 242, 0.15);
+      color: #2273f2;
+    }
+    .annot-shapes-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .annot-caret {
+      opacity: 0.6;
+    }
+    .annot-shape-flyout {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      display: flex;
+      gap: 2px;
+      padding: 4px;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.06);
+      z-index: 5;
+    }
+    .annot-shape-option {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: transparent;
+      border-radius: 6px;
+      color: #333;
+      cursor: pointer;
+    }
+    .annot-shape-option:hover {
+      background: rgba(0,0,0,0.06);
+    }
+    .annot-shape-option.annot-selected {
+      background: rgba(34,115,242,0.15);
       color: #2273f2;
     }
     .annot-swatch {
@@ -651,7 +804,7 @@ function createAnnotator(options) {
   // move-drag, so a handle hit always starts a resize instead of a move.
   var resizing = null;
   // Set to the just-committed annotation immediately after a drawing tool
-  // (pen/line/arrow/rect/ellipse) finishes a stroke (see onPointerUp's
+  // (pen/line/arrow/a shape) finishes a stroke (see onPointerUp's
   // drawing-commit branch), and cleared on the next drawing pointerdown,
   // tool switch, undo, clear, or once its move-drag (if any) is released.
   // While set, it shows the same dashed selection cue as `grabbed` and, if
@@ -707,6 +860,17 @@ function createAnnotator(options) {
   // pointermove events. Reset on every highlight pointerdown.
   var lastHighlightPt = null;
   var selectedTool = null;
+  // The last-picked shape from the Shapes flyout (see pickShape) — drives
+  // both the toolbar button's icon (updateShapesButton) and which shape
+  // activates when the button is reopened and a pick is made.
+  var selectedShape = "rect";
+  // The Shapes flyout's DOM element while open, or null — see
+  // toggleShapeFlyout/hideShapeFlyout.
+  var shapeFlyoutEl = null;
+  // The capture-phase window pointerdown listener that closes the flyout on
+  // an outside click, or null while the flyout is closed — stored so
+  // hideShapeFlyout can remove exactly the listener toggleShapeFlyout added.
+  var shapeFlyoutOutsideHandler = null;
   var selectedColor = ANNOT_COLORS[0];
   var selectedSizeCssPx = ANNOT_SIZES[1].cssPx; // M, a reasonable middle default
   var scale = img.clientWidth / img.naturalWidth;
@@ -715,6 +879,10 @@ function createAnnotator(options) {
   var toolButtons = {};
   var colorButtons = {};
   var sizeButtons = {};
+  // The Shapes toolbar button (built in buildToolbar), or null before it's
+  // built — kept alongside toolButtons so updateToolbarUI/updateShapesButton
+  // can reach it without ANNOT_TOOLS containing a "shapes" entry.
+  var shapesButton = null;
 
   img.draggable = false;
 
@@ -764,6 +932,23 @@ function createAnnotator(options) {
       toolButtons[tool.id] = btn;
       toolsGroup.appendChild(btn);
     });
+
+    // Shapes: one dropdown button standing in for the five ANNOT_SHAPES
+    // tools, inserted between Arrow and Text so the toolbar keeps the same
+    // left-to-right order it always has (rect/ellipse used to sit right
+    // there as their own buttons).
+    var shapesBtn = document.createElement("button");
+    shapesBtn.type = "button";
+    shapesBtn.className = "annot-tool-btn annot-shapes-btn";
+    shapesBtn.title = "Shapes";
+    shapesBtn.setAttribute("aria-label", "Shapes");
+    shapesBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      toggleShapeFlyout(shapesBtn);
+    });
+    shapesButton = shapesBtn;
+    updateShapesButton();
+    toolsGroup.insertBefore(shapesBtn, toolButtons["text"]);
 
     var colorGroup = document.createElement("div");
     colorGroup.className = "annot-group annot-colors";
@@ -827,6 +1012,10 @@ function createAnnotator(options) {
     ANNOT_TOOLS.forEach(function (tool) {
       toolButtons[tool.id].classList.toggle("annot-active", tool.id === selectedTool);
     });
+    if (shapesButton) {
+      shapesButton.classList.toggle("annot-active", isShapeTool(selectedTool));
+      updateShapesButton();
+    }
     ANNOT_COLORS.forEach(function (color) {
       colorButtons[color].classList.toggle("annot-selected", color === selectedColor);
     });
@@ -839,6 +1028,84 @@ function createAnnotator(options) {
     layer.classList.toggle("annot-tool-highlight", selectedTool === "highlight");
   }
 
+  // Syncs the Shapes button's icon (current shape + caret) to `selectedShape`
+  // — called from buildToolbar (initial render) and updateToolbarUI (every
+  // tool switch, including a shape becoming the active tool).
+  function updateShapesButton() {
+    shapesButton.innerHTML = shapeById(selectedShape).icon + CARET_SVG;
+  }
+
+  // Opens the Shapes flyout anchored under `anchorBtn`, or closes it if
+  // already open (the button's click handler always calls this, so it's the
+  // toggle for both directions). Built fresh each open — the flyout is tiny
+  // and this keeps its selected-option highlight trivially in sync with
+  // `selectedShape`, same rationale as the text options popup's rebuild.
+  function toggleShapeFlyout(anchorBtn) {
+    if (shapeFlyoutEl) {
+      hideShapeFlyout();
+      return;
+    }
+    var flyout = document.createElement("div");
+    flyout.className = "annot-shape-flyout";
+    ANNOT_SHAPES.forEach(function (shape) {
+      var opt = document.createElement("button");
+      opt.type = "button";
+      opt.className = "annot-shape-option";
+      if (shape.id === selectedShape) {
+        opt.classList.add("annot-selected");
+      }
+      opt.title = shape.label;
+      opt.setAttribute("aria-label", shape.label);
+      opt.innerHTML = shape.icon;
+      opt.addEventListener("click", function (e) {
+        e.stopPropagation();
+        pickShape(shape.id);
+      });
+      flyout.appendChild(opt);
+    });
+    flyout.style.left = anchorBtn.offsetLeft + "px";
+    // `toolbar` (the bar returned by buildToolbar, `position: relative` —
+    // see annotStyleText) is where content.js places this instance's whole
+    // toolbar, so appending here is the same "float above the anchor inside
+    // a positioned ancestor" pattern the text options popup uses relative to
+    // `wrapper`.
+    toolbar.appendChild(flyout);
+    shapeFlyoutEl = flyout;
+
+    // Close on any pointerdown outside the flyout/button — capture phase so
+    // it sees the event before the target's own handlers (e.g. another
+    // toolbar button's click) run.
+    shapeFlyoutOutsideHandler = function (e) {
+      if (flyout.contains(e.target) || anchorBtn.contains(e.target)) {
+        return;
+      }
+      hideShapeFlyout();
+    };
+    window.addEventListener("pointerdown", shapeFlyoutOutsideHandler, true);
+  }
+
+  function hideShapeFlyout() {
+    if (shapeFlyoutOutsideHandler) {
+      window.removeEventListener("pointerdown", shapeFlyoutOutsideHandler, true);
+      shapeFlyoutOutsideHandler = null;
+    }
+    if (shapeFlyoutEl) {
+      shapeFlyoutEl.remove();
+      shapeFlyoutEl = null;
+    }
+  }
+
+  // A flyout option was picked: remember it as the default for next time,
+  // refresh the button's icon, close the flyout, and activate it as the
+  // drawing tool (selectTool flows the id through selectedTool exactly like
+  // any other tool id — see onPointerDown's trailing drawing-tool branch).
+  function pickShape(id) {
+    selectedShape = id;
+    updateShapesButton();
+    hideShapeFlyout();
+    selectTool(id);
+  }
+
   // Applies a tool's non-destructive state: updates selectedTool, toolbar UI,
   // and layer classes/cursor. Does NOT clear activeText, freshSelection, or
   // repaint. Used by selectTool and, after committing a text box, to switch
@@ -849,6 +1116,9 @@ function createAnnotator(options) {
   }
 
   function selectTool(toolId) {
+    // Switching tools (including picking a shape, which itself routes
+    // through here — see pickShape) always closes the flyout.
+    hideShapeFlyout();
     // Commit before switching so a half-typed box isn't silently dropped —
     // commitTextEditor() itself handles the empty-text-discards case.
     if (textEditorEl) {
@@ -883,7 +1153,7 @@ function createAnnotator(options) {
   }
 
   // Picking a colour or thickness also restyles the currently selected stroke
-  // shape (pen/line/arrow/rect/ellipse — the ones with a `width`; text and
+  // shape (pen/line/arrow/a box shape — the ones with a `width`; text and
   // highlight carry their own controls and are left alone), so a shape can be
   // recoloured or made thicker/thinner after it's drawn, not just before.
   function selectColor(color) {
@@ -1171,7 +1441,7 @@ function createAnnotator(options) {
     if (a.tool === "line" || a.tool === "arrow") {
       return distancePointToSegment(px, py, a.x0, a.y0, a.x1, a.y1) <= tol;
     }
-    if (a.tool === "rect" || a.tool === "ellipse") {
+    if (isShapeTool(a.tool)) {
       return hitBox(a, { x: px, y: py }, tol);
     }
     if (a.tool === "highlight") {
@@ -1282,7 +1552,7 @@ function createAnnotator(options) {
   // The natural-px points a resizable annotation's handles sit on, each
   // `{ id, x, y }`. Callers assume `isResizable(a)` is already true — see
   // handleAt and drawSelectionCue, both of which check it first.
-  // rect/ellipse: 8 handles around the normalized bounding box.
+  // Box shapes (isShapeTool): 8 handles around the normalized bounding box.
   // line/arrow: 2 handles, one per endpoint.
   function handlePoints(a) {
     if (a.tool === "line" || a.tool === "arrow") {
@@ -1331,11 +1601,11 @@ function createAnnotator(options) {
 
   // Mutates `a` in place to reshape it so the dragged `handle` now sits at
   // natural-px (px,py). line/arrow: the dragged endpoint simply becomes
-  // (px,py). rect/ellipse: derive the current edges, move whichever edge(s)
+  // (px,py). Box shapes: derive the current edges, move whichever edge(s)
   // the handle owns (a handle id containing 'w'/'e'/'n'/'s' moves the
   // left/right/top/bottom edge respectively), then store back normalized
   // (x0<=x1, y0<=y1) — dragging a handle past the opposite edge just flips
-  // which corner is which, which is fine since rect/ellipse are always
+  // which corner is which, which is fine since every box shape is always
   // drawn from the normalized box.
   function resizeAnnotation(a, handle, px, py) {
     if (a.tool === "line" || a.tool === "arrow") {
@@ -2039,11 +2309,11 @@ function createAnnotator(options) {
     } else {
       var x1 = pt.x;
       var y1 = pt.y;
-      // Shift-constrain rect/ellipse drags to a square: keep the drag's
+      // Shift-constrain any box-shape drag to a square: keep the drag's
       // signed direction (which corner it's dragged towards) but force
       // |dx| and |dy| to match, using whichever is currently larger.
       // Lines/arrows/pen are unaffected.
-      if (e.shiftKey && (inProgress.tool === "rect" || inProgress.tool === "ellipse")) {
+      if (e.shiftKey && isShapeTool(inProgress.tool)) {
         var dx = x1 - inProgress.x0;
         var dy = y1 - inProgress.y0;
         var side = Math.max(Math.abs(dx), Math.abs(dy));
@@ -2553,6 +2823,7 @@ function createAnnotator(options) {
     }
     hideTextOptions();
     hideScanPill();
+    hideShapeFlyout();
     activeText = null;
     freshSelection = null;
     resizing = null;
