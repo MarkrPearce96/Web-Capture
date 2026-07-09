@@ -78,6 +78,28 @@ var HANDLE_CURSORS = {
 // same way ANNOT_SIZES.cssPx is (see onPointerDown's highlight branch).
 var HIGHLIGHT_ALPHA = 0.4;
 var HIGHLIGHT_BAND_CSS = 16;
+// The highlight bar is fitted to the letters by MEASURING the captured pixels
+// (see measureInkBounds) rather than trusting Vision's box, whose vertical
+// extent is inconsistent. For each word we find the top of the tallest ink and
+// the baseline (the lowest row that still has substantial ink — comma/descender
+// tails are too sparse to count, so they're naturally excluded), then pad the
+// bar equally above the top and below the baseline. Constants, all tunable:
+var HIGHLIGHT_SYM_PAD = 0.08; // symmetric overhang above the top / below the baseline, as a fraction of text height
+var HIGHLIGHT_INK_THRESHOLD = 1400; // squared RGB distance from background above which a pixel counts as ink
+var HIGHLIGHT_TOP_INK = 0.04; // fraction of peak ink count for the top edge (low, to catch thin ascenders)
+var HIGHLIGHT_BASE_INK = 0.33; // fraction of peak ink count for the row to count as "on the baseline"
+
+// Median of a numeric array (0 for empty).
+function highlightMedian(nums) {
+  if (!nums.length) {
+    return 0;
+  }
+  var s = nums.slice().sort(function (a, b) {
+    return a - b;
+  });
+  var mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
 
 // Resize-handle tuning (see handlePoints/handleAt/resizeAnnotation and
 // drawSelectionCue's handle rendering in createAnnotator): HANDLE_CSS is the
@@ -1241,6 +1263,8 @@ function createAnnotator(options) {
             w: a.words[m].w,
             h: a.words[m].h,
             breakAfter: a.words[m].breakAfter,
+            inkTop: a.words[m].inkTop + dy,
+            baselineY: a.words[m].baselineY + dy,
           };
         }
       }
@@ -1347,6 +1371,115 @@ function createAnnotator(options) {
 
   // ---- Highlighter tool: OCR scan + word-snap/freehand sampling ----
 
+  // For each OCR word, measures the real letters from the captured pixels and
+  // sets `inkTop` (top of the tallest ink) and `baselineY` (bottom of the
+  // letters). Scans a padded strip around Vision's box: estimates the
+  // background colour from the rows above the word, counts ink pixels per row,
+  // then takes the first row with substantial ink as the top and the LAST row
+  // that still has substantial ink as the baseline (comma/descender tails are
+  // too sparse to clear the baseline threshold, so they're excluded). Falls
+  // back to Vision's box if the pixels can't be read. Runs once per scan.
+  function measureInkBounds(words) {
+    var ctx;
+    try {
+      ctx = sourceCanvas.getContext("2d");
+    } catch (e) {
+      ctx = null;
+    }
+    for (var wi = 0; wi < words.length; wi++) {
+      var w = words[wi];
+      // Fallback: Vision's box.
+      w.inkTop = w.y;
+      w.baselineY = w.y + w.h;
+      if (!ctx) {
+        continue;
+      }
+      // Confine the scan to the word's OWN box plus a small margin — a large
+      // margin would run into the line above/below on tightly-spaced text and
+      // corrupt the measurement (a single mismeasured word then blows up its
+      // whole bar, which averaging across a dragged run used to hide).
+      var margin = Math.max(1, Math.round(w.h * 0.12));
+      var rx = Math.max(0, Math.floor(w.x));
+      var ry = Math.max(0, Math.floor(w.y - margin));
+      var rw = Math.min(sourceCanvas.width - rx, Math.ceil(w.w));
+      var rh = Math.min(sourceCanvas.height - ry, Math.ceil(w.h + 2 * margin));
+      if (rw < 2 || rh < 2) {
+        continue;
+      }
+      var data;
+      try {
+        data = ctx.getImageData(rx, ry, rw, rh).data;
+      } catch (e2) {
+        continue;
+      }
+      // Background colour: channel-wise median over a sample of the region.
+      // The letters are a minority of the pixels, so the median lands on the
+      // background regardless of what sits just outside the box.
+      var total = rw * rh;
+      var step = Math.max(1, Math.floor(total / 3000));
+      var rs = [];
+      var gs = [];
+      var bs = [];
+      for (var p = 0; p < total; p += step) {
+        var pi = p * 4;
+        rs.push(data[pi]);
+        gs.push(data[pi + 1]);
+        bs.push(data[pi + 2]);
+      }
+      var br = highlightMedian(rs);
+      var bg = highlightMedian(gs);
+      var bb = highlightMedian(bs);
+      // Ink pixel count per row.
+      var counts = new Array(rh);
+      var maxc = 0;
+      for (var y2 = 0; y2 < rh; y2++) {
+        var c = 0;
+        for (var x2 = 0; x2 < rw; x2++) {
+          var i2 = (y2 * rw + x2) * 4;
+          var dr = data[i2] - br;
+          var dgc = data[i2 + 1] - bg;
+          var dbc = data[i2 + 2] - bb;
+          if (dr * dr + dgc * dgc + dbc * dbc > HIGHLIGHT_INK_THRESHOLD) {
+            c++;
+          }
+        }
+        counts[y2] = c;
+        if (c > maxc) {
+          maxc = c;
+        }
+      }
+      if (maxc < 2) {
+        continue; // no clear text; keep the Vision-box fallback
+      }
+      // Top edge: a very low threshold (but at least a couple of pixels of
+      // real ink) so a single thin ascender stroke — the stem of a d/t/b/f —
+      // still counts, instead of the bar top dropping to the x-height.
+      // Baseline: a higher threshold so sparse descender tails don't count.
+      var topThresh = Math.max(2, maxc * HIGHLIGHT_TOP_INK);
+      var baseThresh = maxc * HIGHLIGHT_BASE_INK;
+      var topRow = -1;
+      for (var t = 0; t < rh; t++) {
+        if (counts[t] >= topThresh) {
+          topRow = t;
+          break;
+        }
+      }
+      var baseRow = -1;
+      for (var b = rh - 1; b >= 0; b--) {
+        if (counts[b] >= baseThresh) {
+          baseRow = b;
+          break;
+        }
+      }
+      if (topRow >= 0) {
+        w.inkTop = ry + topRow;
+      }
+      if (baseRow >= 0) {
+        w.baselineY = ry + baseRow + 1;
+      }
+    }
+  }
+
   // Fires the on-device OCR scan for this capture, once (see selectTool's
   // ocrState === "idle" guard — every later Highlighter selection is a
   // no-op here). Fire-and-forget: never blocks tool selection, and the
@@ -1393,6 +1526,8 @@ function createAnnotator(options) {
             breakAfter: /[.,;:!?]$/.test(text),
           };
         });
+        // Measure each word's real ink top and baseline from the pixels.
+        measureInkBounds(ocrWords);
         ocrState = "done";
       } else {
         ocrState = "error";
@@ -1528,6 +1663,24 @@ function createAnnotator(options) {
       L.words.sort(function (a, b) {
         return a.x - b.x;
       });
+
+      // One measured baseline for the whole visual line (median of the words'
+      // measured baselines), so every bar on the line aligns.
+      var lineBaseline = highlightMedian(
+        L.words.map(function (w) {
+          return w.baselineY;
+        })
+      );
+
+      // A finished run -> a bar from the tallest measured ink down to the line
+      // baseline, padded equally above the top and below the baseline.
+      function runRect(run) {
+        var pad = (lineBaseline - run.inkTop) * HIGHLIGHT_SYM_PAD;
+        var top = run.inkTop - pad;
+        var bottom = lineBaseline + pad;
+        return { x: run.x0, y: top, w: run.x1 - run.x0, h: bottom - top };
+      }
+
       var run = null;
       var prev = null;
       L.words.forEach(function (w) {
@@ -1538,18 +1691,17 @@ function createAnnotator(options) {
         var adjacent = prev && !prev.breakAfter && gap < 0.6 * avgH && gap > -avgH;
         if (run && adjacent) {
           run.x1 = Math.max(run.x1, w.x + w.w);
-          run.y0 = Math.min(run.y0, w.y);
-          run.y1 = Math.max(run.y1, w.y + w.h);
+          run.inkTop = Math.min(run.inkTop, w.inkTop);
         } else {
           if (run) {
-            rects.push({ x: run.x0, y: run.y0, w: run.x1 - run.x0, h: run.y1 - run.y0 });
+            rects.push(runRect(run));
           }
-          run = { x0: w.x, y0: w.y, x1: w.x + w.w, y1: w.y + w.h };
+          run = { x0: w.x, x1: w.x + w.w, inkTop: w.inkTop };
         }
         prev = w;
       });
       if (run) {
-        rects.push({ x: run.x0, y: run.y0, w: run.x1 - run.x0, h: run.y1 - run.y0 });
+        rects.push(runRect(run));
       }
     });
     return rects;
@@ -1585,7 +1737,7 @@ function createAnnotator(options) {
         if (!wordAlreadyIncluded(inProgress.words, word)) {
           // Store a copy so clearing its break flag below can't corrupt the
           // shared OCR word list (or another highlight's words).
-          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter };
+          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter, inkTop: word.inkTop, baselineY: word.baselineY };
           // A drag that sweeps across adjacent words links them even across a
           // comma or full stop: clear the break flag on the left of each
           // adjacent in-stroke pair. A single click adds one word with no
