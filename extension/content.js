@@ -3,10 +3,30 @@
 // Page-side capture engine. Injected on demand (after shared.js) by
 // background.js. Guarded so repeated injections don't add extra listeners.
 (() => {
-  if (window.__webCaptureLoaded) {
+  // Wraps the persistent message handler in an onMessage listener.
+  function makeCaptureListener(handleFn) {
+    return function (message, _sender, sendResponse) {
+      handleFn(message)
+        .then(sendResponse)
+        .catch((err) => sendResponse({ error: String(err && err.message ? err.message : err) }));
+      return true; // keep the channel open for the async response
+    };
+  }
+
+  // This script is re-injected on every capture. On any injection after the
+  // first, swap in a FRESH listener bound to the existing handler, then stop.
+  // Safari tears down and revives the non-persistent background after the
+  // extension idles; that revival orphans the previously-registered listener
+  // so its responses no longer route back (measure() then resolves to
+  // undefined and the capture fails). Re-registering restores the channel
+  // while preserving the persistent page state (overlay, in-flight capture).
+  if (window.__webCapture) {
+    browser.runtime.onMessage.removeListener(window.__webCapture.listener);
+    var relisten = makeCaptureListener(window.__webCapture.handle);
+    window.__webCapture.listener = relisten;
+    browser.runtime.onMessage.addListener(relisten);
     return;
   }
-  window.__webCaptureLoaded = true;
 
   // Longer dwell gives scroll-linked animations (GSAP reveals, etc.) and
   // lazy-loaded content time to finish before each frame is captured,
@@ -28,12 +48,11 @@
     regionSelect: null, // { host, onKeydown } while the region-select UI is open
   };
 
-  browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    handle(message)
-      .then(sendResponse)
-      .catch((err) => sendResponse({ error: String(err && err.message ? err.message : err) }));
-    return true; // keep the channel open for the async response
-  });
+  // First initialization: register the listener and remember it (plus the
+  // handler) on window so later re-injections can re-register (see top).
+  const listener = makeCaptureListener(handle);
+  browser.runtime.onMessage.addListener(listener);
+  window.__webCapture = { listener: listener, handle: handle };
 
   async function handle(message) {
     switch (message.type) {
