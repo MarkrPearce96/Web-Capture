@@ -78,24 +78,18 @@ var HANDLE_CURSORS = {
 // same way ANNOT_SIZES.cssPx is (see onPointerDown's highlight branch).
 var HIGHLIGHT_ALPHA = 0.4;
 var HIGHLIGHT_BAND_CSS = 16;
-// Fitting a highlight bar to the letters (baseline at the bottom, tallest ink
-// at the top) is complicated by Vision returning boxes of two kinds depending
-// on the text: "tight" boxes bottom at the baseline (only descender-bearing
-// words reach lower), and "padded" boxes bottom at the font descender line for
-// EVERY word. Which kind a capture uses is detected per capture by comparing
-// the heights of descender vs non-descender words (see annotateBaselines):
-// tight boxes make descender words taller than plain ones; padded boxes make
-// them about equal. Each word then gets a baselineY, and every bar on a line
-// shares the topmost baseline so they align. Constants below, all tunable:
-var HIGHLIGHT_TOP_TRIM = 0.0; // fraction of text height trimmed off the top (0 = tallest ink)
-var HIGHLIGHT_BOTTOM_EXTEND = 0.12; // fraction of text height the bar overhangs past the baseline
-var HIGHLIGHT_PADDED_TRIM = 0.24; // padded boxes: trim this fraction off EVERY word to reach the baseline
-var HIGHLIGHT_TIGHT_RATIO = 1.12; // descender/plain height ratio above which boxes are treated as tight
-// Characters with ink below the baseline: lowercase descenders plus comma and
-// semicolon (the usual culprit on a trailing word like "Sustainable,").
-var HIGHLIGHT_DESCENDER_RE = /[gjpqy,;]/;
+// The highlight bar is fitted to the letters by MEASURING the captured pixels
+// (see measureInkBounds) rather than trusting Vision's box, whose vertical
+// extent is inconsistent. For each word we find the top of the tallest ink and
+// the baseline (the lowest row that still has substantial ink — comma/descender
+// tails are too sparse to count, so they're naturally excluded), then pad the
+// bar equally above the top and below the baseline. Constants, all tunable:
+var HIGHLIGHT_SYM_PAD = 0.08; // symmetric overhang above the top / below the baseline, as a fraction of text height
+var HIGHLIGHT_INK_THRESHOLD = 1400; // squared RGB distance from background above which a pixel counts as ink
+var HIGHLIGHT_TOP_INK = 0.14; // fraction of a row's peak ink count for the row to count as "tallest ink"
+var HIGHLIGHT_BASE_INK = 0.33; // fraction of peak ink count for the row to count as "on the baseline"
 
-// Median of a numeric array (0 for empty). Used by annotateBaselines.
+// Median of a numeric array (0 for empty).
 function highlightMedian(nums) {
   if (!nums.length) {
     return 0;
@@ -105,44 +99,6 @@ function highlightMedian(nums) {
   });
   var mid = Math.floor(s.length / 2);
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
-// Annotates each OCR word with `baselineY` (natural px), the bottom of its
-// letters. Box tightness varies with text SIZE (a big heading can be tight
-// while body text is padded), so words are bucketed by height (~1.5x steps)
-// and each size is classified on its own by comparing descender vs
-// non-descender word heights: tight → plain words keep their box bottom,
-// descender words are lifted by the measured extra height; padded → every
-// word is lifted by HIGHLIGHT_PADDED_TRIM. A size with only one kind of word
-// falls back to padded (the common body-text case).
-function annotateBaselines(words) {
-  var buckets = {};
-  for (var i = 0; i < words.length; i++) {
-    var w = words[i];
-    var key = w.h > 0 ? Math.round(Math.log(w.h) / Math.log(1.5)) : 0;
-    (buckets[key] || (buckets[key] = [])).push(w);
-  }
-  Object.keys(buckets).forEach(function (key) {
-    var group = buckets[key];
-    var descH = [];
-    var plainH = [];
-    group.forEach(function (g) {
-      (g.hasDescender ? descH : plainH).push(g.h);
-    });
-    var hd = highlightMedian(descH);
-    var hn = highlightMedian(plainH);
-    var tight = descH.length > 0 && plainH.length > 0 && hd > hn * HIGHLIGHT_TIGHT_RATIO;
-    // In tight boxes the descender words' extra height IS the descender depth.
-    var tightFrac = tight ? Math.min(0.4, (hd - hn) / hd) : 0;
-    group.forEach(function (g) {
-      var bottom = g.y + g.h;
-      if (tight) {
-        g.baselineY = g.hasDescender ? bottom - tightFrac * g.h : bottom;
-      } else {
-        g.baselineY = bottom - HIGHLIGHT_PADDED_TRIM * g.h;
-      }
-    });
-  });
 }
 
 // Resize-handle tuning (see handlePoints/handleAt/resizeAnnotation and
@@ -1307,6 +1263,7 @@ function createAnnotator(options) {
             w: a.words[m].w,
             h: a.words[m].h,
             breakAfter: a.words[m].breakAfter,
+            inkTop: a.words[m].inkTop + dy,
             baselineY: a.words[m].baselineY + dy,
           };
         }
@@ -1414,6 +1371,109 @@ function createAnnotator(options) {
 
   // ---- Highlighter tool: OCR scan + word-snap/freehand sampling ----
 
+  // For each OCR word, measures the real letters from the captured pixels and
+  // sets `inkTop` (top of the tallest ink) and `baselineY` (bottom of the
+  // letters). Scans a padded strip around Vision's box: estimates the
+  // background colour from the rows above the word, counts ink pixels per row,
+  // then takes the first row with substantial ink as the top and the LAST row
+  // that still has substantial ink as the baseline (comma/descender tails are
+  // too sparse to clear the baseline threshold, so they're excluded). Falls
+  // back to Vision's box if the pixels can't be read. Runs once per scan.
+  function measureInkBounds(words) {
+    var ctx;
+    try {
+      ctx = sourceCanvas.getContext("2d");
+    } catch (e) {
+      ctx = null;
+    }
+    for (var wi = 0; wi < words.length; wi++) {
+      var w = words[wi];
+      // Fallback: Vision's box.
+      w.inkTop = w.y;
+      w.baselineY = w.y + w.h;
+      if (!ctx) {
+        continue;
+      }
+      var pad = Math.max(2, Math.round(w.h * 0.3));
+      var rx = Math.max(0, Math.floor(w.x));
+      var ry = Math.max(0, Math.floor(w.y - pad));
+      var rw = Math.min(sourceCanvas.width - rx, Math.ceil(w.w));
+      var rh = Math.min(sourceCanvas.height - ry, Math.ceil(w.h + 2 * pad));
+      if (rw < 2 || rh < 2) {
+        continue;
+      }
+      var data;
+      try {
+        data = ctx.getImageData(rx, ry, rw, rh).data;
+      } catch (e2) {
+        continue;
+      }
+      // Background colour: mean of the top padded rows, which sit above the
+      // tallest letter and are almost always plain background.
+      var bgRows = Math.max(1, Math.min(pad, Math.floor(rh * 0.2)));
+      var sr = 0;
+      var sg = 0;
+      var sb = 0;
+      var n = 0;
+      for (var yy = 0; yy < bgRows; yy++) {
+        for (var xx = 0; xx < rw; xx++) {
+          var bi = (yy * rw + xx) * 4;
+          sr += data[bi];
+          sg += data[bi + 1];
+          sb += data[bi + 2];
+          n++;
+        }
+      }
+      var br = sr / n;
+      var bg = sg / n;
+      var bb = sb / n;
+      // Ink pixel count per row.
+      var counts = new Array(rh);
+      var maxc = 0;
+      for (var y2 = 0; y2 < rh; y2++) {
+        var c = 0;
+        for (var x2 = 0; x2 < rw; x2++) {
+          var i2 = (y2 * rw + x2) * 4;
+          var dr = data[i2] - br;
+          var dgc = data[i2 + 1] - bg;
+          var dbc = data[i2 + 2] - bb;
+          if (dr * dr + dgc * dgc + dbc * dbc > HIGHLIGHT_INK_THRESHOLD) {
+            c++;
+          }
+        }
+        counts[y2] = c;
+        if (c > maxc) {
+          maxc = c;
+        }
+      }
+      if (maxc < 2) {
+        continue; // no clear text; keep the Vision-box fallback
+      }
+      var topThresh = maxc * HIGHLIGHT_TOP_INK;
+      var baseThresh = maxc * HIGHLIGHT_BASE_INK;
+      var topRow = -1;
+      for (var t = 0; t < rh; t++) {
+        if (counts[t] >= topThresh) {
+          topRow = t;
+          break;
+        }
+      }
+      var baseRow = -1;
+      for (var b = rh - 1; b >= 0; b--) {
+        if (counts[b] >= baseThresh) {
+          baseRow = b;
+          break;
+        }
+      }
+      if (topRow >= 0) {
+        w.inkTop = ry + topRow;
+      }
+      if (baseRow >= 0) {
+        w.baselineY = ry + baseRow + 1;
+      }
+    }
+  }
+
   // Fires the on-device OCR scan for this capture, once (see selectTool's
   // ocrState === "idle" guard — every later Highlighter selection is a
   // no-op here). Fire-and-forget: never blocks tool selection, and the
@@ -1458,13 +1518,10 @@ function createAnnotator(options) {
             // A run of highlighted words merges into one bar unless the word
             // ends a clause/sentence — then the highlight breaks after it.
             breakAfter: /[.,;:!?]$/.test(text),
-            // Whether the word has ink below the baseline (used to detect box
-            // tightness and fit the bar bottom; see annotateBaselines).
-            hasDescender: HIGHLIGHT_DESCENDER_RE.test(text),
           };
         });
-        // Fill in each word's baselineY once, from the whole scan.
-        annotateBaselines(ocrWords);
+        // Measure each word's real ink top and baseline from the pixels.
+        measureInkBounds(ocrWords);
         ocrState = "done";
       } else {
         ocrState = "error";
@@ -1601,21 +1658,20 @@ function createAnnotator(options) {
         return a.x - b.x;
       });
 
-      // One baseline for the whole visual line: the topmost (min) per-word
-      // baselineY (computed in annotateBaselines). Sharing one baseline across
-      // every bar on the line keeps them aligned regardless of which words
-      // happen to have descenders.
-      var lineBaseline = Infinity;
-      L.words.forEach(function (w) {
-        lineBaseline = Math.min(lineBaseline, w.baselineY);
-      });
+      // One measured baseline for the whole visual line (median of the words'
+      // measured baselines), so every bar on the line aligns.
+      var lineBaseline = highlightMedian(
+        L.words.map(function (w) {
+          return w.baselineY;
+        })
+      );
 
-      // A finished run -> a bar from the tallest ink (top) to the line
-      // baseline plus a small even overhang past it.
+      // A finished run -> a bar from the tallest measured ink down to the line
+      // baseline, padded equally above the top and below the baseline.
       function runRect(run) {
-        var textH = lineBaseline - run.top;
-        var top = run.top + textH * HIGHLIGHT_TOP_TRIM;
-        var bottom = lineBaseline + textH * HIGHLIGHT_BOTTOM_EXTEND;
+        var pad = (lineBaseline - run.inkTop) * HIGHLIGHT_SYM_PAD;
+        var top = run.inkTop - pad;
+        var bottom = lineBaseline + pad;
         return { x: run.x0, y: top, w: run.x1 - run.x0, h: bottom - top };
       }
 
@@ -1629,12 +1685,12 @@ function createAnnotator(options) {
         var adjacent = prev && !prev.breakAfter && gap < 0.6 * avgH && gap > -avgH;
         if (run && adjacent) {
           run.x1 = Math.max(run.x1, w.x + w.w);
-          run.top = Math.min(run.top, w.y);
+          run.inkTop = Math.min(run.inkTop, w.inkTop);
         } else {
           if (run) {
             rects.push(runRect(run));
           }
-          run = { x0: w.x, x1: w.x + w.w, top: w.y };
+          run = { x0: w.x, x1: w.x + w.w, inkTop: w.inkTop };
         }
         prev = w;
       });
@@ -1675,7 +1731,7 @@ function createAnnotator(options) {
         if (!wordAlreadyIncluded(inProgress.words, word)) {
           // Store a copy so clearing its break flag below can't corrupt the
           // shared OCR word list (or another highlight's words).
-          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter, baselineY: word.baselineY };
+          var wc = { x: word.x, y: word.y, w: word.w, h: word.h, breakAfter: word.breakAfter, inkTop: word.inkTop, baselineY: word.baselineY };
           // A drag that sweeps across adjacent words links them even across a
           // comma or full stop: clear the break flag on the left of each
           // adjacent in-stroke pair. A single click adds one word with no
