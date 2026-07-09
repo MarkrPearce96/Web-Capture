@@ -84,7 +84,8 @@ var HIGHLIGHT_BAND_CSS = 16;
 // the baseline (the lowest row that still has substantial ink — comma/descender
 // tails are too sparse to count, so they're naturally excluded), then pad the
 // bar equally above the top and below the baseline. Constants, all tunable:
-var HIGHLIGHT_SYM_PAD = 0.08; // symmetric overhang above the top / below the baseline, as a fraction of text height
+var HIGHLIGHT_TOP_PAD = 0.08; // overhang above the tallest ink, as a fraction of text height
+var HIGHLIGHT_BOTTOM_PAD = 0.12; // overhang below the baseline, as a fraction of text height (a touch more than the top)
 var HIGHLIGHT_INK_THRESHOLD = 1400; // squared RGB distance from background above which a pixel counts as ink
 var HIGHLIGHT_TOP_INK = 0.04; // fraction of peak ink count for the top edge (low, to catch thin ascenders)
 var HIGHLIGHT_BASE_INK = 0.33; // fraction of peak ink count for the row to count as "on the baseline"
@@ -1673,11 +1674,11 @@ function createAnnotator(options) {
       );
 
       // A finished run -> a bar from the tallest measured ink down to the line
-      // baseline, padded equally above the top and below the baseline.
+      // baseline, overhanging a little above the top and a bit more below.
       function runRect(run) {
-        var pad = (lineBaseline - run.inkTop) * HIGHLIGHT_SYM_PAD;
-        var top = run.inkTop - pad;
-        var bottom = lineBaseline + pad;
+        var textH = lineBaseline - run.inkTop;
+        var top = run.inkTop - textH * HIGHLIGHT_TOP_PAD;
+        var bottom = lineBaseline + textH * HIGHLIGHT_BOTTOM_PAD;
         return { x: run.x0, y: top, w: run.x1 - run.x0, h: bottom - top };
       }
 
