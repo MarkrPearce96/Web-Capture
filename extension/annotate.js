@@ -85,7 +85,7 @@ var HIGHLIGHT_BAND_CSS = 16;
 // tails are too sparse to count, so they're naturally excluded), then pad the
 // bar equally above the top and below the baseline. Constants, all tunable:
 var HIGHLIGHT_TOP_PAD = 0.08; // overhang above the tallest ink, as a fraction of text height
-var HIGHLIGHT_BOTTOM_PAD = 0.16; // overhang below the baseline, as a fraction of text height (a touch more than the top)
+var HIGHLIGHT_BOTTOM_PAD = 0.12; // overhang below the baseline, as a fraction of text height (a touch more than the top)
 var HIGHLIGHT_INK_THRESHOLD = 1400; // squared RGB distance from background above which a pixel counts as ink
 var HIGHLIGHT_TOP_INK = 0.04; // fraction of peak ink count for the top edge (low, to catch thin ascenders)
 var HIGHLIGHT_BASE_INK = 0.33; // fraction of peak ink count for the row to count as "on the baseline"
