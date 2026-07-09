@@ -1284,9 +1284,15 @@ function createAnnotator(options) {
 
     // Close on any pointerdown outside the flyout/button — capture phase so
     // it sees the event before the target's own handlers (e.g. another
-    // toolbar button's click) run.
+    // toolbar button's click) run. Use composedPath()[0] rather than
+    // e.target: this listener is on `window`, outside the shadow tree, so
+    // e.target is retargeted to the shadow host and would never match the
+    // real button/flyout. composedPath()[0] is the actual clicked element,
+    // which lets the anchor's own click toggle the flyout closed correctly.
     openFlyoutOutsideHandler = function (e) {
-      if (flyout.contains(e.target) || anchorBtn.contains(e.target)) {
+      var path = typeof e.composedPath === "function" ? e.composedPath() : [];
+      var real = path.length ? path[0] : e.target;
+      if (flyout.contains(real) || anchorBtn.contains(real)) {
         return;
       }
       hideToolFlyout();
@@ -2483,14 +2489,16 @@ function createAnnotator(options) {
         tool: selectedTool,
         color: selectedColor,
         width: widthNatural,
-        // Solid when a filled shape variant is selected; the box shapes read
-        // this in drawAnnotation to fill instead of stroke.
-        fill: isShapeTool(selectedTool) && selectedFill,
         x0: pt.x,
         y0: pt.y,
         x1: pt.x,
         y1: pt.y,
       };
+      if (isShapeTool(selectedTool)) {
+        // Solid when a filled shape variant is selected; the box shapes read
+        // this in drawAnnotation to fill instead of stroke.
+        inProgress.fill = selectedFill;
+      }
       // Dash style (and, for arrow, both-headed) from the last-picked Lines
       // variant — only stamped for line/arrow, so a shape never picks up a
       // `dash` field the same way a line never picks up a meaningful `fill`.
