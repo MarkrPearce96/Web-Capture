@@ -86,7 +86,7 @@ var HIGHLIGHT_BAND_CSS = 16;
 // bar equally above the top and below the baseline. Constants, all tunable:
 var HIGHLIGHT_SYM_PAD = 0.08; // symmetric overhang above the top / below the baseline, as a fraction of text height
 var HIGHLIGHT_INK_THRESHOLD = 1400; // squared RGB distance from background above which a pixel counts as ink
-var HIGHLIGHT_TOP_INK = 0.14; // fraction of a row's peak ink count for the row to count as "tallest ink"
+var HIGHLIGHT_TOP_INK = 0.04; // fraction of peak ink count for the top edge (low, to catch thin ascenders)
 var HIGHLIGHT_BASE_INK = 0.33; // fraction of peak ink count for the row to count as "on the baseline"
 
 // Median of a numeric array (0 for empty).
@@ -1451,7 +1451,11 @@ function createAnnotator(options) {
       if (maxc < 2) {
         continue; // no clear text; keep the Vision-box fallback
       }
-      var topThresh = maxc * HIGHLIGHT_TOP_INK;
+      // Top edge: a very low threshold (but at least a couple of pixels of
+      // real ink) so a single thin ascender stroke — the stem of a d/t/b/f —
+      // still counts, instead of the bar top dropping to the x-height.
+      // Baseline: a higher threshold so sparse descender tails don't count.
+      var topThresh = Math.max(2, maxc * HIGHLIGHT_TOP_INK);
       var baseThresh = maxc * HIGHLIGHT_BASE_INK;
       var topRow = -1;
       for (var t = 0; t < rh; t++) {
