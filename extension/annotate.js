@@ -119,6 +119,17 @@ function highlightMedian(nums) {
 var HANDLE_CSS = 9;
 var HANDLE_HIT_CSS = 8;
 
+// Finishes a box-shape's current path: filled with its colour when it's a
+// solid variant, otherwise stroked with the colour/width already set up.
+function fillOrStrokeShape(ctx, a) {
+  if (a.fill) {
+    ctx.fillStyle = a.color;
+    ctx.fill();
+  } else {
+    ctx.stroke();
+  }
+}
+
 function drawAnnotation(ctx, a) {
   // Text and Highlight annotations have no stroke (their color/width don't
   // map onto strokeStyle/lineWidth the way every other tool's does) and each
@@ -173,7 +184,9 @@ function drawAnnotation(ctx, a) {
     var ry = Math.min(a.y0, a.y1);
     var rw = Math.abs(a.x1 - a.x0);
     var rh = Math.abs(a.y1 - a.y0);
-    ctx.strokeRect(rx, ry, rw, rh);
+    ctx.beginPath();
+    ctx.rect(rx, ry, rw, rh);
+    fillOrStrokeShape(ctx, a);
     return;
   }
 
@@ -184,7 +197,7 @@ function drawAnnotation(ctx, a) {
     var eh = Math.abs(a.y1 - a.y0);
     ctx.beginPath();
     ctx.ellipse(ex + ew / 2, ey + eh / 2, ew / 2, eh / 2, 0, 0, Math.PI * 2);
-    ctx.stroke();
+    fillOrStrokeShape(ctx, a);
     return;
   }
 
@@ -198,7 +211,7 @@ function drawAnnotation(ctx, a) {
     ctx.lineTo(tLeft, tTop + tH);
     ctx.lineTo(tLeft + tW, tTop + tH);
     ctx.closePath();
-    ctx.stroke();
+    fillOrStrokeShape(ctx, a);
     return;
   }
 
@@ -213,7 +226,7 @@ function drawAnnotation(ctx, a) {
     ctx.lineTo(dLeft + dW / 2, dTop + dH);
     ctx.lineTo(dLeft, dTop + dH / 2);
     ctx.closePath();
-    ctx.stroke();
+    fillOrStrokeShape(ctx, a);
     return;
   }
 
@@ -243,7 +256,7 @@ function drawAnnotation(ctx, a) {
       }
     }
     ctx.closePath();
-    ctx.stroke();
+    fillOrStrokeShape(ctx, a);
   }
 }
 
@@ -442,46 +455,88 @@ var ANNOT_TOOLS = [
 // annotation's `tool` value exactly the same way (isShapeTool below matches
 // on it), so no separate mapping is needed between flyout choice and drawn
 // shape.
+// Each flyout option: `key` is its unique id, `tool` the annotation tool it
+// draws (the five base box-shapes), `fill` whether it's solid (fill follows
+// the colour) or an outline (stroke follows the colour). Outline variants
+// first, then the filled variants (solid icons: fill="currentColor").
 var ANNOT_SHAPES = [
   {
-    id: "rect",
+    key: "rect",
+    tool: "rect",
+    fill: false,
     label: "Rectangle",
-    icon:
-      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>',
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>',
   },
   {
-    id: "ellipse",
+    key: "ellipse",
+    tool: "ellipse",
+    fill: false,
     label: "Ellipse",
-    icon:
-      '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10" cy="10" r="6.5"/></svg>',
+    icon: '<svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="10" cy="10" r="6.5"/></svg>',
   },
   {
-    id: "triangle",
+    key: "triangle",
+    tool: "triangle",
+    fill: false,
     label: "Triangle",
-    icon:
-      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 4 21 20 3 20Z"/></svg>',
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 4 21 20 3 20Z"/></svg>',
   },
   {
-    id: "diamond",
+    key: "diamond",
+    tool: "diamond",
+    fill: false,
     label: "Diamond",
-    icon:
-      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 21 12 12 21 3 12Z"/></svg>',
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 21 12 12 21 3 12Z"/></svg>',
   },
   {
-    id: "star",
+    key: "star",
+    tool: "star",
+    fill: false,
     label: "Star",
-    icon:
-      '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.4 5.4 5.9.5-4.5 3.9 1.4 5.8L12 16.9 6.4 19.5l1.4-5.8L3.3 9.4l5.9-.5z"/></svg>',
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.4 5.4 5.9.5-4.5 3.9 1.4 5.8L12 16.9 6.4 19.5l1.4-5.8L3.3 9.4l5.9-.5z"/></svg>',
+  },
+  {
+    key: "rect-fill",
+    tool: "rect",
+    fill: true,
+    label: "Filled rectangle",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="4" y="6" width="16" height="12" rx="1"/></svg>',
+  },
+  {
+    key: "ellipse-fill",
+    tool: "ellipse",
+    fill: true,
+    label: "Filled ellipse",
+    icon: '<svg viewBox="0 0 20 20" width="16" height="16" fill="currentColor"><circle cx="10" cy="10" r="6.5"/></svg>',
+  },
+  {
+    key: "triangle-fill",
+    tool: "triangle",
+    fill: true,
+    label: "Filled triangle",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 4 21 20 3 20Z"/></svg>',
+  },
+  {
+    key: "diamond-fill",
+    tool: "diamond",
+    fill: true,
+    label: "Filled diamond",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 3 21 12 12 21 3 12Z"/></svg>',
+  },
+  {
+    key: "star-fill",
+    tool: "star",
+    fill: true,
+    label: "Filled star",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 3l2.4 5.4 5.9.5-4.5 3.9 1.4 5.8L12 16.9 6.4 19.5l1.4-5.8L3.3 9.4l5.9-.5z"/></svg>',
   },
 ];
 
-// Looks up an ANNOT_SHAPES entry by id, falling back to the first shape
-// (rect) so a corrupt/unknown `selectedShape` (should never happen — it's
-// only ever set from an ANNOT_SHAPES id, see pickShape) can't leave the
-// Shapes button's icon blank.
-function shapeById(id) {
+// Looks up an ANNOT_SHAPES entry by key, falling back to the first (outline
+// rectangle) so a corrupt/unknown selectedShapeKey can't blank the button.
+function shapeByKey(key) {
   for (var i = 0; i < ANNOT_SHAPES.length; i++) {
-    if (ANNOT_SHAPES[i].id === id) {
+    if (ANNOT_SHAPES[i].key === key) {
       return ANNOT_SHAPES[i];
     }
   }
@@ -555,6 +610,8 @@ function annotStyleText() {
       position: absolute;
       bottom: calc(100% + 6px);
       display: flex;
+      flex-wrap: wrap;
+      max-width: 168px;
       gap: 2px;
       padding: 4px;
       background: #fff;
@@ -860,10 +917,11 @@ function createAnnotator(options) {
   // pointermove events. Reset on every highlight pointerdown.
   var lastHighlightPt = null;
   var selectedTool = null;
-  // The last-picked shape from the Shapes flyout (see pickShape) — drives
-  // both the toolbar button's icon (updateShapesButton) and which shape
-  // activates when the button is reopened and a pick is made.
-  var selectedShape = "rect";
+  // The last-picked shape variant from the Shapes flyout (see pickShape), by
+  // ANNOT_SHAPES key — drives the toolbar button's icon. `selectedFill`
+  // mirrors that variant's fill flag and is stamped onto each new shape.
+  var selectedShapeKey = "rect";
+  var selectedFill = false;
   // The Shapes flyout's DOM element while open, or null — see
   // toggleShapeFlyout/hideShapeFlyout.
   var shapeFlyoutEl = null;
@@ -1028,18 +1086,18 @@ function createAnnotator(options) {
     layer.classList.toggle("annot-tool-highlight", selectedTool === "highlight");
   }
 
-  // Syncs the Shapes button's icon (current shape + caret) to `selectedShape`
+  // Syncs the Shapes button's icon (current shape + caret) to `selectedShapeKey`
   // — called from buildToolbar (initial render) and updateToolbarUI (every
   // tool switch, including a shape becoming the active tool).
   function updateShapesButton() {
-    shapesButton.innerHTML = shapeById(selectedShape).icon + CARET_SVG;
+    shapesButton.innerHTML = shapeByKey(selectedShapeKey).icon + CARET_SVG;
   }
 
   // Opens the Shapes flyout anchored under `anchorBtn`, or closes it if
   // already open (the button's click handler always calls this, so it's the
   // toggle for both directions). Built fresh each open — the flyout is tiny
   // and this keeps its selected-option highlight trivially in sync with
-  // `selectedShape`, same rationale as the text options popup's rebuild.
+  // `selectedShapeKey`, same rationale as the text options popup's rebuild.
   function toggleShapeFlyout(anchorBtn) {
     if (shapeFlyoutEl) {
       hideShapeFlyout();
@@ -1047,21 +1105,25 @@ function createAnnotator(options) {
     }
     var flyout = document.createElement("div");
     flyout.className = "annot-shape-flyout";
+    var pending = [];
     ANNOT_SHAPES.forEach(function (shape) {
       var opt = document.createElement("button");
       opt.type = "button";
-      opt.className = "annot-shape-option";
-      if (shape.id === selectedShape) {
+      opt.className = "annot-tool-btn annot-shape-option";
+      if (shape.key === selectedShapeKey) {
         opt.classList.add("annot-selected");
       }
       opt.title = shape.label;
       opt.setAttribute("aria-label", shape.label);
-      opt.innerHTML = shape.icon;
-      opt.addEventListener("click", function (e) {
+      // Select on pointerdown (not click) so the pick fires during the press,
+      // before anything can remove the flyout out from under a later click.
+      opt.addEventListener("pointerdown", function (e) {
+        e.preventDefault();
         e.stopPropagation();
-        pickShape(shape.id);
+        pickShape(shape.key);
       });
       flyout.appendChild(opt);
+      pending.push({ opt: opt, icon: shape.icon });
     });
     flyout.style.left = anchorBtn.offsetLeft + "px";
     // `toolbar` (the bar returned by buildToolbar, `position: relative` —
@@ -1070,6 +1132,11 @@ function createAnnotator(options) {
     // a positioned ancestor" pattern the text options popup uses relative to
     // `wrapper`.
     toolbar.appendChild(flyout);
+    // Set each option's SVG icon only AFTER the flyout is attached to the
+    // document — WebKit doesn't paint SVG assigned to a detached node.
+    pending.forEach(function (p) {
+      p.opt.innerHTML = p.icon;
+    });
     shapeFlyoutEl = flyout;
 
     // Close on any pointerdown outside the flyout/button — capture phase so
@@ -1099,11 +1166,13 @@ function createAnnotator(options) {
   // refresh the button's icon, close the flyout, and activate it as the
   // drawing tool (selectTool flows the id through selectedTool exactly like
   // any other tool id — see onPointerDown's trailing drawing-tool branch).
-  function pickShape(id) {
-    selectedShape = id;
+  function pickShape(key) {
+    var shape = shapeByKey(key);
+    selectedShapeKey = key;
+    selectedFill = shape.fill;
     updateShapesButton();
     hideShapeFlyout();
-    selectTool(id);
+    selectTool(shape.tool);
   }
 
   // Applies a tool's non-destructive state: updates selectedTool, toolbar UI,
@@ -2257,6 +2326,9 @@ function createAnnotator(options) {
         tool: selectedTool,
         color: selectedColor,
         width: widthNatural,
+        // Solid when a filled shape variant is selected; the box shapes read
+        // this in drawAnnotation to fill instead of stroke.
+        fill: isShapeTool(selectedTool) && selectedFill,
         x0: pt.x,
         y0: pt.y,
         x1: pt.x,
