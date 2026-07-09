@@ -1394,11 +1394,15 @@ function createAnnotator(options) {
       if (!ctx) {
         continue;
       }
-      var pad = Math.max(2, Math.round(w.h * 0.3));
+      // Confine the scan to the word's OWN box plus a small margin — a large
+      // margin would run into the line above/below on tightly-spaced text and
+      // corrupt the measurement (a single mismeasured word then blows up its
+      // whole bar, which averaging across a dragged run used to hide).
+      var margin = Math.max(1, Math.round(w.h * 0.12));
       var rx = Math.max(0, Math.floor(w.x));
-      var ry = Math.max(0, Math.floor(w.y - pad));
+      var ry = Math.max(0, Math.floor(w.y - margin));
       var rw = Math.min(sourceCanvas.width - rx, Math.ceil(w.w));
-      var rh = Math.min(sourceCanvas.height - ry, Math.ceil(w.h + 2 * pad));
+      var rh = Math.min(sourceCanvas.height - ry, Math.ceil(w.h + 2 * margin));
       if (rw < 2 || rh < 2) {
         continue;
       }
@@ -1408,25 +1412,23 @@ function createAnnotator(options) {
       } catch (e2) {
         continue;
       }
-      // Background colour: mean of the top padded rows, which sit above the
-      // tallest letter and are almost always plain background.
-      var bgRows = Math.max(1, Math.min(pad, Math.floor(rh * 0.2)));
-      var sr = 0;
-      var sg = 0;
-      var sb = 0;
-      var n = 0;
-      for (var yy = 0; yy < bgRows; yy++) {
-        for (var xx = 0; xx < rw; xx++) {
-          var bi = (yy * rw + xx) * 4;
-          sr += data[bi];
-          sg += data[bi + 1];
-          sb += data[bi + 2];
-          n++;
-        }
+      // Background colour: channel-wise median over a sample of the region.
+      // The letters are a minority of the pixels, so the median lands on the
+      // background regardless of what sits just outside the box.
+      var total = rw * rh;
+      var step = Math.max(1, Math.floor(total / 3000));
+      var rs = [];
+      var gs = [];
+      var bs = [];
+      for (var p = 0; p < total; p += step) {
+        var pi = p * 4;
+        rs.push(data[pi]);
+        gs.push(data[pi + 1]);
+        bs.push(data[pi + 2]);
       }
-      var br = sr / n;
-      var bg = sg / n;
-      var bb = sb / n;
+      var br = highlightMedian(rs);
+      var bg = highlightMedian(gs);
+      var bb = highlightMedian(bs);
       // Ink pixel count per row.
       var counts = new Array(rh);
       var maxc = 0;
