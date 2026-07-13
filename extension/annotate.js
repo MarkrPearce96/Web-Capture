@@ -1446,6 +1446,33 @@ function createAnnotator(options) {
     repaint();
   }
 
+  // Deletes the currently-selected annotation (the active text box, or the
+  // fresh/selected annotation for any other tool). Returns true if something
+  // was deleted so the caller can consume the key. Callers must skip this
+  // while a text editor is open (Backspace should edit the text there).
+  function deleteSelected() {
+    var target = activeText || freshSelection;
+    if (!target) {
+      return false;
+    }
+    var idx = annotations.indexOf(target);
+    if (idx !== -1) {
+      annotations.splice(idx, 1);
+    }
+    if (freshSelection === target) {
+      freshSelection = null;
+      updateFreshHoverCursor(null);
+    }
+    if (activeText === target) {
+      activeText = null;
+      hideTextOptions();
+    }
+    grabbed = null;
+    resizing = null;
+    repaint();
+    return true;
+  }
+
   // ---- coordinates + backing store ----
 
   function toNatural(e) {
@@ -3085,6 +3112,7 @@ function createAnnotator(options) {
     destroy: destroy,
     refresh: resizeLayer,
     isEditingText: isEditingText,
+    deleteSelected: deleteSelected,
   };
 }
 
