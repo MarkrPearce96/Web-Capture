@@ -96,11 +96,12 @@ var HIGHLIGHT_BAND_CSS = 16;
 var HIGHLIGHT_TOP_PAD = 0.08; // overhang above the tallest ink, as a fraction of text height (thinnest thickness)
 var HIGHLIGHT_BOTTOM_PAD = 0.12; // overhang below the baseline, as a fraction of text height (thinnest thickness)
 
-// Maps a selected stroke size (ANNOT_SIZES cssPx: 2/4/8) to a highlight
-// thickness multiplier on the base pads above — the thinnest size keeps the
-// current tight fit; thicker sizes extend the bar further above and below.
-function highlightPadMul(cssPx) {
-  return cssPx <= 2 ? 1 : cssPx <= 4 ? 2 : 3;
+// Maps a selected stroke size (ANNOT_SIZES cssPx: 2/4/8) to EXTRA highlight
+// overhang, as a fraction of text height added above AND below the base pads
+// — the thinnest size adds nothing (current tight fit); thicker sizes make a
+// clearly chunkier bar. Bar heights work out to ~1.2x / 1.7x / 2.3x the text.
+function highlightExtraPad(cssPx) {
+  return cssPx <= 2 ? 0 : cssPx <= 4 ? 0.25 : 0.55;
 }
 var HIGHLIGHT_INK_THRESHOLD = 1400; // squared RGB distance from background above which a pixel counts as ink
 var HIGHLIGHT_TOP_INK = 0.04; // fraction of peak ink count for the top edge (low, to catch thin ascenders)
@@ -1414,11 +1415,11 @@ function createAnnotator(options) {
       repaint();
     } else if (freshSelection && freshSelection.tool === "highlight") {
       // Thickness controls a highlight's vertical size: re-fit its bars (and
-      // freehand band) at the new thickness multiplier.
-      var mul = highlightPadMul(cssPx);
-      freshSelection.padMul = mul;
-      freshSelection.bandWidth = (HIGHLIGHT_BAND_CSS / scale) * mul;
-      freshSelection.rects = mergeHighlightWords(freshSelection.words, mul);
+      // freehand band) at the new thickness.
+      var extra = highlightExtraPad(cssPx);
+      freshSelection.extraPad = extra;
+      freshSelection.bandWidth = (HIGHLIGHT_BAND_CSS / scale) * (1 + extra * 2);
+      freshSelection.rects = mergeHighlightWords(freshSelection.words, extra);
       repaint();
     }
     updateToolbarUI();
@@ -2178,11 +2179,11 @@ function createAnnotator(options) {
   // inter-word gaps), but the run breaks after any word that ends a clause or
   // sentence (comma, full stop, etc. — see `breakAfter`). Words separated by a
   // large gap (an un-highlighted word between them) also start a new bar.
-  function mergeHighlightWords(words, padMul) {
+  function mergeHighlightWords(words, extraPad) {
     if (!words.length) {
       return [];
     }
-    var mul = padMul || 1;
+    var extra = extraPad || 0;
     // Bucket into lines by vertical overlap.
     var lines = [];
     words
@@ -2222,8 +2223,8 @@ function createAnnotator(options) {
       // baseline, overhanging a little above the top and a bit more below.
       function runRect(run) {
         var textH = lineBaseline - run.inkTop;
-        var top = run.inkTop - textH * HIGHLIGHT_TOP_PAD * mul;
-        var bottom = lineBaseline + textH * HIGHLIGHT_BOTTOM_PAD * mul;
+        var top = run.inkTop - textH * (HIGHLIGHT_TOP_PAD + extra);
+        var bottom = lineBaseline + textH * (HIGHLIGHT_BOTTOM_PAD + extra);
         return { x: run.x0, y: top, w: run.x1 - run.x0, h: bottom - top };
       }
 
@@ -2307,7 +2308,7 @@ function createAnnotator(options) {
       }
     }
     if (addedWord) {
-      inProgress.rects = mergeHighlightWords(inProgress.words, inProgress.padMul);
+      inProgress.rects = mergeHighlightWords(inProgress.words, inProgress.extraPad);
     }
   }
 
@@ -2392,10 +2393,10 @@ function createAnnotator(options) {
       words: dedupeWords(allWords),
       band: allBand,
       bandWidth: nh.bandWidth,
-      padMul: nh.padMul,
+      extraPad: nh.extraPad,
       rects: [],
     };
-    merged.rects = mergeHighlightWords(merged.words, merged.padMul);
+    merged.rects = mergeHighlightWords(merged.words, merged.extraPad);
     return merged;
   }
 
@@ -2516,15 +2517,15 @@ function createAnnotator(options) {
     if (selectedTool === "highlight") {
       layer.setPointerCapture(e.pointerId);
       activePointerId = e.pointerId;
-      var hlMul = highlightPadMul(selectedSizeCssPx);
+      var hlExtra = highlightExtraPad(selectedSizeCssPx);
       inProgress = {
         tool: "highlight",
         color: selectedColor,
         words: [],
         rects: [],
         band: [],
-        bandWidth: (HIGHLIGHT_BAND_CSS / scale) * hlMul,
-        padMul: hlMul,
+        bandWidth: (HIGHLIGHT_BAND_CSS / scale) * (1 + hlExtra * 2),
+        extraPad: hlExtra,
       };
       lastHighlightPt = pt;
       addHighlightSample(inProgress, pt, pt);
