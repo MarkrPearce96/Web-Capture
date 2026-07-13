@@ -93,8 +93,16 @@ var HIGHLIGHT_BAND_CSS = 16;
 // the baseline (the lowest row that still has substantial ink — comma/descender
 // tails are too sparse to count, so they're naturally excluded), then pad the
 // bar equally above the top and below the baseline. Constants, all tunable:
-var HIGHLIGHT_TOP_PAD = 0.08; // overhang above the tallest ink, as a fraction of text height
-var HIGHLIGHT_BOTTOM_PAD = 0.12; // overhang below the baseline, as a fraction of text height (a touch more than the top)
+var HIGHLIGHT_TOP_PAD = 0.08; // overhang above the tallest ink, as a fraction of text height (thinnest thickness)
+var HIGHLIGHT_BOTTOM_PAD = 0.12; // overhang below the baseline, as a fraction of text height (thinnest thickness)
+
+// Maps a selected stroke size (ANNOT_SIZES cssPx: 2/4/8) to EXTRA highlight
+// overhang, as a fraction of text height added above AND below the base pads
+// — the thinnest size adds nothing (current tight fit); thicker sizes make a
+// clearly chunkier bar. Bar heights work out to ~1.2x / 1.7x / 2.3x the text.
+function highlightExtraPad(cssPx) {
+  return cssPx <= 2 ? 0 : cssPx <= 4 ? 0.25 : 0.55;
+}
 var HIGHLIGHT_INK_THRESHOLD = 1400; // squared RGB distance from background above which a pixel counts as ink
 var HIGHLIGHT_TOP_INK = 0.04; // fraction of peak ink count for the top edge (low, to catch thin ascenders)
 var HIGHLIGHT_BASE_INK = 0.33; // fraction of peak ink count for the row to count as "on the baseline"
@@ -1405,6 +1413,14 @@ function createAnnotator(options) {
     if (freshSelection && freshSelection.width !== undefined) {
       freshSelection.width = cssPx / scale;
       repaint();
+    } else if (freshSelection && freshSelection.tool === "highlight") {
+      // Thickness controls a highlight's vertical size: re-fit its bars (and
+      // freehand band) at the new thickness.
+      var extra = highlightExtraPad(cssPx);
+      freshSelection.extraPad = extra;
+      freshSelection.bandWidth = (HIGHLIGHT_BAND_CSS / scale) * (1 + extra * 2);
+      freshSelection.rects = mergeHighlightWords(freshSelection.words, extra);
+      repaint();
     }
     updateToolbarUI();
   }
@@ -1444,6 +1460,33 @@ function createAnnotator(options) {
     activeText = null;
     hideTextOptions();
     repaint();
+  }
+
+  // Deletes the currently-selected annotation (the active text box, or the
+  // fresh/selected annotation for any other tool). Returns true if something
+  // was deleted so the caller can consume the key. Callers must skip this
+  // while a text editor is open (Backspace should edit the text there).
+  function deleteSelected() {
+    var target = activeText || freshSelection;
+    if (!target) {
+      return false;
+    }
+    var idx = annotations.indexOf(target);
+    if (idx !== -1) {
+      annotations.splice(idx, 1);
+    }
+    if (freshSelection === target) {
+      freshSelection = null;
+      updateFreshHoverCursor(null);
+    }
+    if (activeText === target) {
+      activeText = null;
+      hideTextOptions();
+    }
+    grabbed = null;
+    resizing = null;
+    repaint();
+    return true;
   }
 
   // ---- coordinates + backing store ----
@@ -2136,10 +2179,11 @@ function createAnnotator(options) {
   // inter-word gaps), but the run breaks after any word that ends a clause or
   // sentence (comma, full stop, etc. — see `breakAfter`). Words separated by a
   // large gap (an un-highlighted word between them) also start a new bar.
-  function mergeHighlightWords(words) {
+  function mergeHighlightWords(words, extraPad) {
     if (!words.length) {
       return [];
     }
+    var extra = extraPad || 0;
     // Bucket into lines by vertical overlap.
     var lines = [];
     words
@@ -2179,8 +2223,8 @@ function createAnnotator(options) {
       // baseline, overhanging a little above the top and a bit more below.
       function runRect(run) {
         var textH = lineBaseline - run.inkTop;
-        var top = run.inkTop - textH * HIGHLIGHT_TOP_PAD;
-        var bottom = lineBaseline + textH * HIGHLIGHT_BOTTOM_PAD;
+        var top = run.inkTop - textH * (HIGHLIGHT_TOP_PAD + extra);
+        var bottom = lineBaseline + textH * (HIGHLIGHT_BOTTOM_PAD + extra);
         return { x: run.x0, y: top, w: run.x1 - run.x0, h: bottom - top };
       }
 
@@ -2264,7 +2308,7 @@ function createAnnotator(options) {
       }
     }
     if (addedWord) {
-      inProgress.rects = mergeHighlightWords(inProgress.words);
+      inProgress.rects = mergeHighlightWords(inProgress.words, inProgress.extraPad);
     }
   }
 
@@ -2349,9 +2393,10 @@ function createAnnotator(options) {
       words: dedupeWords(allWords),
       band: allBand,
       bandWidth: nh.bandWidth,
+      extraPad: nh.extraPad,
       rects: [],
     };
-    merged.rects = mergeHighlightWords(merged.words);
+    merged.rects = mergeHighlightWords(merged.words, merged.extraPad);
     return merged;
   }
 
@@ -2472,7 +2517,16 @@ function createAnnotator(options) {
     if (selectedTool === "highlight") {
       layer.setPointerCapture(e.pointerId);
       activePointerId = e.pointerId;
-      inProgress = { tool: "highlight", color: selectedColor, words: [], rects: [], band: [], bandWidth: HIGHLIGHT_BAND_CSS / scale };
+      var hlExtra = highlightExtraPad(selectedSizeCssPx);
+      inProgress = {
+        tool: "highlight",
+        color: selectedColor,
+        words: [],
+        rects: [],
+        band: [],
+        bandWidth: (HIGHLIGHT_BAND_CSS / scale) * (1 + hlExtra * 2),
+        extraPad: hlExtra,
+      };
       lastHighlightPt = pt;
       addHighlightSample(inProgress, pt, pt);
       repaint();
@@ -3085,6 +3139,7 @@ function createAnnotator(options) {
     destroy: destroy,
     refresh: resizeLayer,
     isEditingText: isEditingText,
+    deleteSelected: deleteSelected,
   };
 }
 
