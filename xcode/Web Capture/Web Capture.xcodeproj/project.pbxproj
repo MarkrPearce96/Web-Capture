@@ -23,9 +23,9 @@
 		4D71F6562FFC0E4C0009059C /* content.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6512FFC0E4C0009059C /* content.js */; };
 		4D71F6572FFC0E4C0009059C /* shared.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6522FFC0E4C0009059C /* shared.js */; };
 		4D71F6582FFC0E4C0009059C /* pdf.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F6592FFC0E4C0009059C /* pdf.js */; };
-		4D71F65E2FFC0E4C0009059C /* annotate.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F65F2FFC0E4C0009059C /* annotate.js */; };
 		4D71F65A2FFC0E4C0009059C /* popup.html in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F65C2FFC0E4C0009059C /* popup.html */; };
 		4D71F65B2FFC0E4C0009059C /* popup.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F65D2FFC0E4C0009059C /* popup.js */; };
+		4D71F65E2FFC0E4C0009059C /* annotate.js in Resources */ = {isa = PBXBuildFile; fileRef = 4D71F65F2FFC0E4C0009059C /* annotate.js */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,9 +72,9 @@
 		4D71F6512FFC0E4C0009059C /* content.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = content.js; path = ../../../extension/content.js; sourceTree = "<group>"; };
 		4D71F6522FFC0E4C0009059C /* shared.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = shared.js; path = ../../../extension/shared.js; sourceTree = "<group>"; };
 		4D71F6592FFC0E4C0009059C /* pdf.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = pdf.js; path = ../../../extension/pdf.js; sourceTree = "<group>"; };
-		4D71F65F2FFC0E4C0009059C /* annotate.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = annotate.js; path = ../../../extension/annotate.js; sourceTree = "<group>"; };
 		4D71F65C2FFC0E4C0009059C /* popup.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; name = popup.html; path = ../../../extension/popup.html; sourceTree = "<group>"; };
 		4D71F65D2FFC0E4C0009059C /* popup.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = popup.js; path = ../../../extension/popup.js; sourceTree = "<group>"; };
+		4D71F65F2FFC0E4C0009059C /* annotate.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = annotate.js; path = ../../../extension/annotate.js; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -448,6 +448,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 62P4GYN8E3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -482,6 +483,7 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 62P4GYN8E3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -519,6 +521,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 62P4GYN8E3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -540,7 +543,7 @@
 					"-framework",
 					WebKit,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "com.markpearce.WebCapture";
+				PRODUCT_BUNDLE_IDENTIFIER = com.markpearce.WebCapture;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -560,6 +563,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 62P4GYN8E3;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
@@ -581,7 +585,7 @@
 					"-framework",
 					WebKit,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "com.markpearce.WebCapture";
+				PRODUCT_BUNDLE_IDENTIFIER = com.markpearce.WebCapture;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
