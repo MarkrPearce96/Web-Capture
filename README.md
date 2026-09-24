@@ -16,8 +16,9 @@ The `brew trust` step is needed because Homebrew refuses to install casks
 from a third-party tap until you explicitly trust it — a one-time,
 per-Mac step.
 
-**This build is unsigned** (personal Apple ID, not notarized — no paid
-Apple Developer account behind it). After installing:
+**This build is signed with a personal Apple Development certificate, not
+notarized** (personal Apple ID, no paid Apple Developer account behind it).
+After installing:
 
 1. Open it once (double-click or right-click → Open). If Gatekeeper blocks
    it, go to **System Settings → Privacy & Security**, scroll down, and
@@ -30,7 +31,10 @@ Apple Developer account behind it). After installing:
 
 ## Building from source
 
-Requires the full Xcode app (not just Command Line Tools).
+Requires the full Xcode app (not just Command Line Tools), signed in with an
+Apple ID that has a free "Apple Development" certificate (Xcode → Settings →
+Accounts → Manage Certificates → **+**) — Safari refuses to register
+extensions signed ad-hoc or self-signed, even for local personal builds.
 
 ```bash
 xcodebuild -project "xcode/Web Capture/Web Capture.xcodeproj" -scheme "Web Capture" -configuration Debug build

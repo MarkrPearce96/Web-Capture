@@ -19,23 +19,48 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Build (ad-hoc signed)
+      - name: Import signing certificate
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$APPLE_CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          rm -f "$CERT_PATH"
+
+      - name: Build (signed with a personal Apple Development certificate)
         run: |
           xcodebuild \
             -project "xcode/Web Capture/Web Capture.xcodeproj" \
             -scheme "Web Capture" \
             -configuration Release \
             -derivedDataPath build \
-            CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Development" \
+            DEVELOPMENT_TEAM=62P4GYN8E3 \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
             CODE_SIGN_ENTITLEMENTS="$(pwd)/xcode/ci-release.entitlements" \
             build
 
-      - name: Verify entitlements are correct (sandboxed, no debug entitlement)
+      - name: Verify signing chain and entitlements
         run: |
           APP_PATH="build/Build/Products/Release/Web Capture.app"
+          SIGNING_INFO=$(codesign -dvvv "$APP_PATH" 2>&1)
+          if ! echo "$SIGNING_INFO" | grep -q "Authority=Apple Root CA"; then
+            echo "Built app is not signed by a real Apple-issued certificate chain (Safari refuses to register extensions signed ad-hoc or self-signed)" >&2
+            echo "$SIGNING_INFO" >&2
+            exit 1
+          fi
           ENTITLEMENTS=$(codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null)
           if [ -z "$ENTITLEMENTS" ]; then
             echo "Built app has NO entitlements at all — signing produced an unsandboxed binary" >&2
@@ -89,3 +114,7 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             --notes-file <(echo "sha256: $(cut -d' ' -f1 sha256.txt)")
+
+      - name: Remove the temporary signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
