@@ -14,8 +14,10 @@ brew install --cask web-capture
 **This build is unsigned** (personal Apple ID, not notarized — no paid
 Apple Developer account behind it). After installing:
 
-1. Right-click **Web Capture** in Applications and choose **Open** once,
-   to get past Gatekeeper's "unidentified developer" warning.
+1. Open it once (double-click or right-click → Open). If Gatekeeper blocks
+   it, go to **System Settings → Privacy & Security**, scroll down, and
+   click **Open Anyway** next to the Web Capture warning (only needed
+   once).
 2. In Safari: **Settings → Advanced** → check **Show Develop menu**, then
    **Develop → Allow Unsigned Extensions** (this resets every time Safari
    fully quits, so you'll redo it each session).
