@@ -26,6 +26,7 @@
 - The zip's internal top-level entry must be exactly `Web Capture.app` (not nested under a longer build-output path) — Homebrew's `app "Web Capture.app"` stanza only finds it there. (Task 4, Task 6)
 - `brew install --cask web-capture` on a Mac that already has a manually Xcode-built `/Applications/Web Capture.app` (not Homebrew-managed) — Homebrew refuses to overwrite an app it doesn't manage. (Task 7)
 - `MARKETING_VERSION` drifting from the git tag / Cask `version` on a future release (e.g. someone bumps one and forgets the other) — produces an app that reports a different version than what Homebrew thinks it installed. (Task 3, Task 6)
+- `brew uninstall --zap web-capture` leaving files behind because the sandboxed app's real container paths weren't verified against reality, just assumed from convention — a person expecting "zap removes everything" shouldn't find leftovers in `~/Library` afterward. (Task 5, Task 7)
 
 ---
 
@@ -315,6 +316,17 @@ cask "web-capture" do
 
   app "Web Capture.app"
 
+  zap trash: [
+    "~/Library/Containers/com.markpearce.WebCapture",
+    "~/Library/Containers/com.markpearce.WebCapture.Extension",
+    "~/Library/Preferences/com.markpearce.WebCapture.plist",
+    "~/Library/Preferences/com.markpearce.WebCapture.Extension.plist",
+    "~/Library/Caches/com.markpearce.WebCapture",
+    "~/Library/Saved Application State/com.markpearce.WebCapture.savedState",
+    "~/Library/HTTPStorages/com.markpearce.WebCapture",
+    "~/Library/WebKit/com.markpearce.WebCapture",
+  ]
+
   caveats <<~EOS
     Web Capture is unsigned (personal use, not notarized). On first launch:
       1. Right-click "Web Capture" in Applications and choose "Open" to
@@ -323,9 +335,22 @@ cask "web-capture" do
          then Develop > "Allow Unsigned Extensions" (resets each time
          Safari fully quits).
       3. Enable the extension in Safari > Settings > Extensions.
+
+    `brew uninstall --zap web-capture` removes the app's sandbox container,
+    preferences, and caches. It does not remove Safari's own record that
+    the extension was once installed — Safari drops that on its own once
+    the app is gone.
   EOS
 end
 ```
+
+(This `zap trash:` list covers the standard locations a sandboxed macOS
+app uses, keyed off the app's known bundle IDs — `com.markpearce.WebCapture`
+and `com.markpearce.WebCapture.Extension`. Homebrew silently skips any path
+in the list that doesn't exist, so listing all of them is safe even though
+not all will be populated. Task 7 verifies which of these actually get
+created and confirms `--zap` removes them, adjusting the list if anything's
+missing or extra.)
 
 (The sha256 above is a 68-character placeholder — real Homebrew sha256 values are 64 hex characters; this deliberately-wrong-length placeholder makes it obvious and impossible to mistake for a real one if Task 6 is somehow skipped. It will be replaced with the real 64-character sha256 in Task 6.)
 
@@ -459,6 +484,51 @@ Ask the human partner to:
 
 Report back pass/fail. **If Safari refuses to list/enable the ad-hoc-signed extension** (the one open risk flagged in the spec), the fallback is: export the existing free-personal-team certificate from Keychain Access as a `.p12`, add it as two GitHub encrypted secrets, and change Task 4's workflow to import that certificate into a temporary CI keychain and sign with it instead of `CODE_SIGN_IDENTITY=-`. That fallback is a follow-up task, not attempted speculatively here.
 
-- [ ] **Step 5: Confirm upgrade path works (optional, once a v1.0.1 exists)**
+- [ ] **Step 5: Snapshot what the app actually created on disk**
+
+After Step 4's manual launch + Safari enable (so the app has actually run at least once and had a chance to write preferences/container state):
+
+```bash
+for p in \
+  "$HOME/Library/Containers/com.markpearce.WebCapture" \
+  "$HOME/Library/Containers/com.markpearce.WebCapture.Extension" \
+  "$HOME/Library/Preferences/com.markpearce.WebCapture.plist" \
+  "$HOME/Library/Preferences/com.markpearce.WebCapture.Extension.plist" \
+  "$HOME/Library/Caches/com.markpearce.WebCapture" \
+  "$HOME/Library/Saved Application State/com.markpearce.WebCapture.savedState" \
+  "$HOME/Library/HTTPStorages/com.markpearce.WebCapture" \
+  "$HOME/Library/WebKit/com.markpearce.WebCapture" ; do
+  [ -e "$p" ] && echo "EXISTS: $p" || echo "missing: $p"
+done
+```
+
+Also run a broader sweep in case something was created outside this list:
+```bash
+find "$HOME/Library" -maxdepth 4 -iname "*markpearce*WebCapture*" 2>/dev/null
+```
+
+Note which paths actually exist — this is the real list `zap` needs to cover.
+
+- [ ] **Step 6: Test `--zap` removal**
+
+```bash
+brew uninstall --zap web-capture
+ls -d "/Applications/Web Capture.app" 2>&1
+```
+Expected: the app itself is gone (`No such file or directory`). Then re-run the exact same existence checks from Step 5 — every path that existed before should now be gone.
+
+- [ ] **Step 7: Reconcile the Cask's `zap trash:` list with reality**
+
+If Step 6 shows a path that still exists after `--zap` (something Step 5 found that wasn't in the Cask's list, or a genuinely new path from the broader sweep), add it to `~/Developer/homebrew-tap/Casks/web-capture.rb`'s `zap trash:` array. If any listed path never existed at all in Step 5, it's harmless to leave it (Homebrew skips missing paths) — no need to remove it. If you changed the file:
+```bash
+cd ~/Developer/homebrew-tap
+ruby -c Casks/web-capture.rb && brew style Casks/web-capture.rb
+git add Casks/web-capture.rb
+git commit -m "fix: reconcile zap trash list with actual on-disk state"
+git push origin main
+```
+Then reinstall (`brew install --cask web-capture`) and repeat Steps 5–6 once to confirm the reconciled list is now complete.
+
+- [ ] **Step 8: Confirm upgrade path works (optional, once a v1.0.1 exists)**
 
 Not part of this plan's scope — noted here only so a future release remembers to sanity-check `brew upgrade --cask web-capture` once there's a second version to upgrade to.

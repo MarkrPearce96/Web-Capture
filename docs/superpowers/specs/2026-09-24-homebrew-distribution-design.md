@@ -114,6 +114,23 @@ end
 Homebrew's current symbol list at implementation time — the project's
 actual `MACOSX_DEPLOYMENT_TARGET` is a very recent macOS release.)
 
+**Clean uninstall (`brew uninstall --zap`):** the app is sandboxed
+(`ENABLE_APP_SANDBOX = YES`), so its real on-disk state lives under
+`~/Library/Containers/<bundle-id>/`, not the classic flat
+`~/Library/Preferences`/`~/Library/Caches` locations a non-sandboxed app
+would use. The Cask gets a `zap trash: [...]` stanza covering the standard
+sandboxed-app locations for both `com.markpearce.WebCapture` and
+`com.markpearce.WebCapture.Extension`. `zap trash:` is safe to list paths
+that never end up existing (Homebrew skips missing paths silently), so the
+stanza covers the full standard set even though not every category will
+necessarily be populated. Since no build of this app has run on this
+machine yet, the exact set can't be confirmed by inspection ahead of time —
+it's verified empirically after the real install in Task 7 of the plan
+(install, run once, diff `~/Library` for newly-created bundle-id paths,
+confirm `--zap` removes them, adjust the list if anything was missed).
+Safari's own extension-registry entry for the app is left alone — that's
+Safari's shared state, not something safe to blanket-delete via zap.
+
 Bumping `version`/`sha256` in this file after each Web-Capture release is a
 manual edit + push for now. Auto-syncing it from the release workflow would
 need a cross-repo personal-access-token secret for something that happens a
