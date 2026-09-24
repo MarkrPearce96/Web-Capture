@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select latest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build (ad-hoc signed)
+        run: |
+          xcodebuild \
+            -project "xcode/Web Capture/Web Capture.xcodeproj" \
+            -scheme "Web Capture" \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            build
+
+      - name: Verify built version matches the tag
+        run: |
+          APP_PATH="build/Build/Products/Release/Web Capture.app"
+          TAG="${GITHUB_REF#refs/tags/v}"
+          BUILT_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+          if [ "$BUILT_VERSION" != "$TAG" ]; then
+            echo "Tag is v$TAG but built app reports version $BUILT_VERSION (MARKETING_VERSION out of sync with the tag)" >&2
+            exit 1
+          fi
+
+      - name: Zip the app
+        run: |
+          APP_PATH="build/Build/Products/Release/Web Capture.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Built app not found at $APP_PATH" >&2
+            find build/Build/Products -maxdepth 3 >&2
+            exit 1
+          fi
+          ditto -c -k --keepParent "$APP_PATH" WebCapture.zip
+          TOP_ENTRY=$(unzip -Z1 WebCapture.zip | head -1)
+          if [ "$TOP_ENTRY" != "Web Capture.app/" ]; then
+            echo "Zip's top-level entry is '$TOP_ENTRY', expected 'Web Capture.app/'" >&2
+            unzip -Z1 WebCapture.zip >&2
+            exit 1
+          fi
+
+      - name: Compute sha256
+        run: shasum -a 256 WebCapture.zip | tee sha256.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" WebCapture.zip \
+            --title "$TAG" \
+            --generate-notes \
+            --notes-file <(echo "sha256: $(cut -d' ' -f1 sha256.txt)")
