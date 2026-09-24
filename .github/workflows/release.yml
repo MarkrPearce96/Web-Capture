@@ -30,17 +30,25 @@ jobs:
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+            CODE_SIGN_ENTITLEMENTS="xcode/ci-release.entitlements" \
             build
 
-      - name: Verify no debug entitlements shipped
+      - name: Verify entitlements are correct (sandboxed, no debug entitlement)
         run: |
           APP_PATH="build/Build/Products/Release/Web Capture.app"
           ENTITLEMENTS=$(codesign -d --entitlements - --xml "$APP_PATH" 2>/dev/null)
-          if echo "$ENTITLEMENTS" | grep -q "<key>com.apple.security.get-task-allow</key>"; then
-            if echo "$ENTITLEMENTS" | grep -A1 "<key>com.apple.security.get-task-allow</key>" | grep -q "<true/>"; then
-              echo "Built app has com.apple.security.get-task-allow=true — CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO did not take effect" >&2
-              exit 1
-            fi
+          if [ -z "$ENTITLEMENTS" ]; then
+            echo "Built app has NO entitlements at all — signing produced an unsandboxed binary" >&2
+            exit 1
+          fi
+          if ! echo "$ENTITLEMENTS" | grep -A1 "<key>com.apple.security.app-sandbox</key>" | grep -q "<true/>"; then
+            echo "Built app is missing com.apple.security.app-sandbox=true" >&2
+            echo "$ENTITLEMENTS" >&2
+            exit 1
+          fi
+          if echo "$ENTITLEMENTS" | grep -A1 "<key>com.apple.security.get-task-allow</key>" | grep -q "<true/>"; then
+            echo "Built app has com.apple.security.get-task-allow=true (debug entitlement should not ship)" >&2
+            exit 1
           fi
 
       - name: Verify built version matches the tag
