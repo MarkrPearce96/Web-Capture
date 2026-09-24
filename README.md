@@ -8,8 +8,13 @@ lines, text boxes, and an OCR-powered highlighter) in the capture preview.
 
 ```bash
 brew tap markrpearce96/tap
+brew trust markrpearce96/tap
 brew install --cask web-capture
 ```
+
+The `brew trust` step is needed because Homebrew refuses to install casks
+from a third-party tap until you explicitly trust it — a one-time,
+per-Mac step.
 
 **This build is unsigned** (personal Apple ID, not notarized — no paid
 Apple Developer account behind it). After installing:
